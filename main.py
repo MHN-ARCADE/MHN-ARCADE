@@ -1,6 +1,7 @@
 
 import os
 import discord
+from database import initialize_database
 from discord.ext import commands
 
 # ==============================
@@ -51,4 +52,5 @@ async def ping(interaction: discord.Interaction):
     )
 
 
+initialize_database()
 bot.run(TOKEN)
