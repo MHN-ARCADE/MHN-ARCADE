@@ -670,7 +670,7 @@ async def language(
             "your progress in both Arabic and English tracks, "
             "including levels, XP, statistics, and achievements.\n\n"
             "Your active season statistics will also reset.\n"
-            "Ended season archives and special titles will remain محفوظ.\n\n"
+            "Ended season archives and special titles will remain preserved.\n\n"
             "Nothing will change until you confirm."
         )
 
