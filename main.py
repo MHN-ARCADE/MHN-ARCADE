@@ -1,4 +1,3 @@
-
 """
 ========================================================
 MHN ARCADE V1
@@ -32,11 +31,9 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing!")
 
-# Arcade channels
 ARABIC_ARCADE_CHANNEL_ID = 1567665645905121330
 ENGLISH_ARCADE_CHANNEL_ID = 1567700330433609910
 
-# Theme
 PURPLE = 0x7C3AED
 
 logging.basicConfig(
@@ -52,11 +49,7 @@ logger = logging.getLogger("MHN_ARCADE")
 # ========================================================
 
 intents = discord.Intents.default()
-
-# Required for detecting new members
 intents.members = True
-
-# Message Content Intent is not required for our slash commands.
 
 
 # ========================================================
@@ -79,10 +72,8 @@ class MHNArcadeBot(commands.Bot):
 
     async def setup_hook(self):
 
-        # Initialize database
         initialize_database()
 
-        # Synchronize slash commands
         synced = await self.tree.sync()
 
         logger.info(
@@ -165,22 +156,28 @@ async def ensure_welcome_message(
     embed: discord.Embed
 ):
 
-    # Check whether this welcome message was sent before
     saved_message = get_bot_message(
         guild.id,
         message_key
     )
 
+    # Check the previously saved message first.
     if saved_message:
 
         try:
-            await bot.fetch_channel(
+
+            saved_channel = await bot.fetch_channel(
                 int(saved_message["channel_id"])
             )
 
-            await bot.get_channel(
-                int(saved_message["channel_id"])
-            ).fetch_message(
+            if not hasattr(saved_channel, "fetch_message"):
+                logger.error(
+                    "Saved welcome destination cannot fetch messages: %s",
+                    message_key
+                )
+                return False
+
+            await saved_channel.fetch_message(
                 int(saved_message["message_id"])
             )
 
@@ -189,43 +186,85 @@ async def ensure_welcome_message(
                 message_key
             )
 
-            return
+            return True
 
-        except (discord.NotFound, discord.HTTPException, AttributeError):
+        except discord.NotFound:
+
             logger.warning(
-                "Saved welcome message could not be found. "
-                "A replacement will be created."
+                "Saved welcome message or channel was deleted: %s",
+                message_key
             )
+
+            # Continue below and create a replacement.
 
         except discord.Forbidden:
-            logger.error(
-                "Missing permissions to read the saved welcome message."
-            )
-            return
 
-    # Get target channel
+            logger.error(
+                "Missing permission to read saved welcome message: %s",
+                message_key
+            )
+
+            return False
+
+        except discord.HTTPException as error:
+
+            logger.error(
+                "Could not verify saved welcome message: %s",
+                error
+            )
+
+            # Do not create a duplicate because of a temporary API error.
+            return False
+
+    # Get the configured destination channel.
     channel = bot.get_channel(channel_id)
 
     if channel is None:
+
         try:
+
             channel = await bot.fetch_channel(channel_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+
+        except discord.NotFound:
+
             logger.error(
-                "Could not access welcome channel %s",
+                "Welcome channel does not exist: %s",
                 channel_id
             )
-            return
+
+            return False
+
+        except discord.Forbidden:
+
+            logger.error(
+                "Missing permission to access welcome channel: %s",
+                channel_id
+            )
+
+            return False
+
+        except discord.HTTPException as error:
+
+            logger.error(
+                "Failed to fetch welcome channel: %s",
+                error
+            )
+
+            return False
 
     if not isinstance(channel, discord.TextChannel):
+
         logger.error(
             "Welcome destination is not a text channel: %s",
             channel_id
         )
-        return
+
+        return False
 
     if channel.guild.id != guild.id:
-        return
+        return False
 
+    # Send and save the new persistent welcome message.
     try:
 
         message = await channel.send(
@@ -244,36 +283,55 @@ async def ensure_welcome_message(
             message_key
         )
 
+        return True
+
     except discord.Forbidden:
+
         logger.error(
             "Missing permission to send welcome message in %s",
             channel.name
         )
 
+        return False
+
     except discord.HTTPException as error:
+
         logger.error(
             "Failed to send welcome message: %s",
             error
         )
 
+        return False
+
+
+# ========================================================
+# INITIALIZE WELCOME MESSAGES
+# ========================================================
 
 async def initialize_welcome_messages():
 
+    all_successful = True
+
     for guild in bot.guilds:
 
-        await ensure_welcome_message(
+        arabic_success = await ensure_welcome_message(
             guild=guild,
             message_key="welcome_ar",
             channel_id=ARABIC_ARCADE_CHANNEL_ID,
             embed=create_arabic_welcome()
         )
 
-        await ensure_welcome_message(
+        english_success = await ensure_welcome_message(
             guild=guild,
             message_key="welcome_en",
             channel_id=ENGLISH_ARCADE_CHANNEL_ID,
             embed=create_english_welcome()
         )
+
+        if not arabic_success or not english_success:
+            all_successful = False
+
+    return all_successful
 
 
 # ========================================================
@@ -291,12 +349,19 @@ async def on_ready():
     logger.info("Status: ONLINE")
     logger.info("=" * 45)
 
-    # Prevent duplicate welcome messages after reconnecting
+    # Run welcome verification once successfully.
     if not bot.welcome_messages_checked:
 
-        await initialize_welcome_messages()
+        success = await initialize_welcome_messages()
 
-        bot.welcome_messages_checked = True
+        if success:
+            bot.welcome_messages_checked = True
+            logger.info("Welcome messages verified successfully.")
+        else:
+            logger.warning(
+                "Some welcome messages could not be verified. "
+                "They will be checked again after reconnecting."
+            )
 
 
 # ========================================================
@@ -414,13 +479,27 @@ class LanguageConfirmationView(discord.ui.View):
             else "English"
         )
 
+        if language == "ar":
+
+            title = "💜 تم تغيير اللغة"
+
+            description = (
+                "تم تغيير لغتك إلى **العربية** بنجاح.\n\n"
+                "🎮 يبدأ تقدمك الجديد من المستوى 0 وبدون XP."
+            )
+
+        else:
+
+            title = "💜 Language Updated"
+
+            description = (
+                "Your language is now **English**.\n\n"
+                "🎮 Your new progress starts at Level 0 with 0 XP."
+            )
+
         embed = discord.Embed(
-            title="💜 Language Updated",
-            description=(
-                f"Your language is now **{language_name}**.\n\n"
-                "Your new player progress starts at Level 0 "
-                "with 0 XP."
-            ),
+            title=title,
+            description=description,
             color=PURPLE
         )
 
@@ -499,7 +578,7 @@ async def language(
         interaction.user.id
     )
 
-    # First-time player registration
+    # Register the player if this is their first interaction.
     if player is None:
 
         create_player(
@@ -515,7 +594,7 @@ async def language(
 
     current_language = player["active_language"]
 
-    # Same language selected
+    # The player already uses this language.
     if current_language == selected_language:
 
         await interaction.response.send_message(
@@ -525,7 +604,7 @@ async def language(
 
         return
 
-    # First language selection: no reset required
+    # First language selection: no reset required.
     if current_language is None:
 
         select_language(
@@ -535,17 +614,27 @@ async def language(
             language=selected_language
         )
 
-        language_name = (
-            "العربية" if selected_language == "ar"
-            else "English"
-        )
+        if selected_language == "ar":
+
+            title = "💜 تم اختيار اللغة"
+
+            description = (
+                "تم اختيار اللغة العربية بنجاح!\n\n"
+                "🎮 رحلتك تبدأ الآن من المستوى 0."
+            )
+
+        else:
+
+            title = "💜 Language Selected"
+
+            description = (
+                "Your arcade language is now **English**!\n\n"
+                "🎮 Your journey starts at Level 0."
+            )
 
         embed = discord.Embed(
-            title="💜 Language Selected",
-            description=(
-                f"Your arcade language is now **{language_name}**!\n\n"
-                "🎮 Your journey starts at Level 0."
-            ),
+            title=title,
+            description=description,
             color=PURPLE
         )
 
@@ -556,7 +645,7 @@ async def language(
 
         return
 
-    # Switching language requires explicit confirmation
+    # Switching language requires explicit confirmation.
     if selected_language == "ar":
 
         title = "⚠️ تأكيد تغيير اللغة"
@@ -566,6 +655,8 @@ async def language(
             "🔴 **تنبيه:** تغيير اللغة سيؤدي إلى تصفير "
             "تقدمك في مساري العربية والإنجليزية، "
             "بما في ذلك المستوى وXP والإحصائيات والإنجازات.\n\n"
+            "سيتم أيضًا تصفير إحصائيات المواسم النشطة فقط.\n"
+            "أما المواسم المنتهية وألقابك الخاصة فستبقى محفوظة.\n\n"
             "لن يتم التغيير إلا بعد تأكيدك."
         )
 
@@ -578,6 +669,8 @@ async def language(
             "🔴 **Warning:** Switching languages will reset "
             "your progress in both Arabic and English tracks, "
             "including levels, XP, statistics, and achievements.\n\n"
+            "Your active season statistics will also reset.\n"
+            "Ended season archives and special titles will remain محفوظ.\n\n"
             "Nothing will change until you confirm."
         )
 
@@ -602,14 +695,11 @@ async def language(
 
 
 # ========================================================
-# GLOBAL ERROR HANDLER
+# GLOBAL PREFIX COMMAND ERROR HANDLER
 # ========================================================
 
 @bot.event
-async def on_command_error(
-    ctx,
-    error
-):
+async def on_command_error(ctx, error):
 
     logger.error(
         "Command error: %s",
