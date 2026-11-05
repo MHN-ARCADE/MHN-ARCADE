@@ -1,20 +1,8 @@
-
 """
 ========================================================
 MHN ARCADE V1
 Database Core - Purple Gaming System 💜
 ========================================================
-
-Responsible for:
-- Player registration
-- Arabic / English progress tracks
-- XP, levels and prestige
-- Achievements
-- Special titles
-- Seasons and leaderboards
-- Persistent bot messages
-
-SQLite database layer.
 """
 
 import os
@@ -48,7 +36,6 @@ def get_connection():
     )
 
     connection.row_factory = sqlite3.Row
-
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 30000")
 
@@ -71,10 +58,7 @@ def get_connection():
 def archive_legacy_tables(db):
     """
     Preserve tables from the original prototype.
-
     Old tables are renamed instead of deleted.
-    This prevents the new schema from conflicting
-    with the first version of the database.
     """
 
     legacy_tables = {
@@ -141,36 +125,20 @@ def initialize_database():
         db.executescript(
             """
 
-            -- ==========================================
-            -- PLAYERS
-            -- ==========================================
-
             CREATE TABLE IF NOT EXISTS players (
-
                 guild_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
-
                 username TEXT NOT NULL,
-
                 active_language TEXT,
-
                 joined_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-
                 PRIMARY KEY (guild_id, user_id)
-
             );
 
 
-            -- ==========================================
-            -- PLAYER PROGRESS
-            -- ==========================================
-
             CREATE TABLE IF NOT EXISTS progress (
-
                 guild_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
-
                 language TEXT NOT NULL
                     CHECK(language IN ('ar', 'en')),
 
@@ -199,33 +167,21 @@ def initialize_database():
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
-                PRIMARY KEY (
-                    guild_id,
-                    user_id,
-                    language
-                ),
+                PRIMARY KEY (guild_id, user_id, language),
 
                 FOREIGN KEY (guild_id, user_id)
                     REFERENCES players(guild_id, user_id)
                     ON DELETE CASCADE
-
             );
 
 
-            -- ==========================================
-            -- ACHIEVEMENTS
-            -- ==========================================
-
             CREATE TABLE IF NOT EXISTS achievements (
-
                 guild_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
-
                 language TEXT NOT NULL
                     CHECK(language IN ('ar', 'en')),
 
                 achievement_key TEXT NOT NULL,
-
                 unlocked_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
                 PRIMARY KEY (
@@ -246,42 +202,22 @@ def initialize_database():
                     language
                 )
                 ON DELETE CASCADE
-
             );
 
-
-            -- ==========================================
-            -- SPECIAL TITLES
-            -- Owner-only titles:
-            -- CHAMPION / IMMORTAL / LEGACY
-            -- ==========================================
 
             CREATE TABLE IF NOT EXISTS special_titles (
-
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-
                 guild_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
-
                 title TEXT NOT NULL,
-
                 granted_by TEXT NOT NULL,
-
                 granted_at TEXT DEFAULT CURRENT_TIMESTAMP
-
             );
 
 
-            -- ==========================================
-            -- SEASONS
-            -- ==========================================
-
             CREATE TABLE IF NOT EXISTS seasons (
-
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-
                 guild_id TEXT NOT NULL,
-
                 language TEXT NOT NULL
                     CHECK(language IN ('ar', 'en')),
 
@@ -291,17 +227,12 @@ def initialize_database():
                     CHECK(status IN ('active', 'ended')),
 
                 started_at TEXT DEFAULT CURRENT_TIMESTAMP,
-
                 ended_at TEXT,
-
                 started_by TEXT NOT NULL,
-
                 ended_by TEXT
-
             );
 
 
-            -- Only one active season per language
             CREATE UNIQUE INDEX IF NOT EXISTS
             one_active_season_per_language
 
@@ -310,26 +241,14 @@ def initialize_database():
             WHERE status = 'active';
 
 
-            -- ==========================================
-            -- SEASON PLAYER STATS
-            -- ==========================================
-
             CREATE TABLE IF NOT EXISTS season_stats (
-
                 season_id INTEGER NOT NULL,
-
                 user_id TEXT NOT NULL,
-
                 username TEXT NOT NULL,
-
                 xp INTEGER NOT NULL DEFAULT 0,
-
                 wins INTEGER NOT NULL DEFAULT 0,
-
                 losses INTEGER NOT NULL DEFAULT 0,
-
                 draws INTEGER NOT NULL DEFAULT 0,
-
                 games_played INTEGER NOT NULL DEFAULT 0,
 
                 PRIMARY KEY (season_id, user_id),
@@ -337,30 +256,17 @@ def initialize_database():
                 FOREIGN KEY (season_id)
                     REFERENCES seasons(id)
                     ON DELETE CASCADE
-
             );
 
 
-            -- ==========================================
-            -- ARCHIVED SEASON RESULTS
-            -- ==========================================
-
             CREATE TABLE IF NOT EXISTS season_results (
-
                 season_id INTEGER NOT NULL,
-
                 user_id TEXT NOT NULL,
-
                 username TEXT NOT NULL,
-
                 xp INTEGER NOT NULL DEFAULT 0,
-
                 wins INTEGER NOT NULL DEFAULT 0,
-
                 games_played INTEGER NOT NULL DEFAULT 0,
-
                 final_level INTEGER NOT NULL DEFAULT 0,
-
                 final_rank TEXT NOT NULL DEFAULT 'ROOKIE',
 
                 PRIMARY KEY (season_id, user_id),
@@ -368,34 +274,19 @@ def initialize_database():
                 FOREIGN KEY (season_id)
                     REFERENCES seasons(id)
                     ON DELETE CASCADE
-
             );
 
 
-            -- ==========================================
-            -- PERSISTENT BOT MESSAGES
-            -- ==========================================
-
             CREATE TABLE IF NOT EXISTS bot_messages (
-
                 guild_id TEXT NOT NULL,
-
                 message_key TEXT NOT NULL,
-
                 channel_id TEXT NOT NULL,
-
                 message_id TEXT NOT NULL,
-
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
                 PRIMARY KEY (guild_id, message_key)
-
             );
 
-
-            -- ==========================================
-            -- LEADERBOARD INDEX
-            -- ==========================================
 
             CREATE INDEX IF NOT EXISTS
             progress_leaderboard_idx
@@ -428,17 +319,12 @@ def create_player(guild_id, user_id, username):
                 user_id,
                 username
             )
-
             VALUES (?, ?, ?)
 
             ON CONFLICT(guild_id, user_id)
-
             DO UPDATE SET
-
                 username = excluded.username,
-
                 updated_at = CURRENT_TIMESTAMP
-
             """,
             (
                 str(guild_id),
@@ -459,12 +345,9 @@ def get_player(guild_id, user_id):
         return db.execute(
             """
             SELECT *
-
             FROM players
-
             WHERE guild_id = ?
             AND user_id = ?
-
             """,
             (
                 str(guild_id),
@@ -487,15 +370,11 @@ def ensure_progress(guild_id, user_id, language):
         db.execute(
             """
             INSERT OR IGNORE INTO progress (
-
                 guild_id,
                 user_id,
                 language
-
             )
-
             VALUES (?, ?, ?)
-
             """,
             (
                 str(guild_id),
@@ -519,13 +398,10 @@ def get_progress(guild_id, user_id, language):
         return db.execute(
             """
             SELECT *
-
             FROM progress
-
             WHERE guild_id = ?
             AND user_id = ?
             AND language = ?
-
             """,
             (
                 str(guild_id),
@@ -551,43 +427,55 @@ def select_language(
         Creates a new progress track.
 
     Language switch:
-        Resets both language progress tracks,
-        then creates a fresh track in the new language.
-
-    This follows the agreed reset-on-switch rule.
+        Resets both language progress tracks.
+        Resets this player's stats in active seasons.
+        Keeps ended season archives.
+        Keeps owner-granted special titles.
     """
 
     if language not in SUPPORTED_LANGUAGES:
         raise ValueError("Unsupported language.")
 
-    create_player(
-        guild_id,
-        user_id,
-        username
-    )
+    guild_id = str(guild_id)
+    user_id = str(user_id)
 
     with get_connection() as db:
+
+        db.execute(
+            """
+            INSERT INTO players (
+                guild_id,
+                user_id,
+                username
+            )
+            VALUES (?, ?, ?)
+
+            ON CONFLICT(guild_id, user_id)
+            DO UPDATE SET
+                username = excluded.username,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                guild_id,
+                user_id,
+                username
+            )
+        )
 
         player = db.execute(
             """
             SELECT active_language
-
             FROM players
-
             WHERE guild_id = ?
             AND user_id = ?
-
             """,
             (
-                str(guild_id),
-                str(user_id)
+                guild_id,
+                user_id
             )
         ).fetchone()
 
-        previous_language = (
-            player["active_language"]
-            if player else None
-        )
+        previous_language = player["active_language"]
 
         switched = (
             previous_language is not None
@@ -596,36 +484,53 @@ def select_language(
 
         if switched:
 
+            # Delete both language progress tracks.
+            # Related achievements are deleted automatically.
             db.execute(
                 """
                 DELETE FROM progress
-
                 WHERE guild_id = ?
                 AND user_id = ?
-
                 """,
                 (
-                    str(guild_id),
-                    str(user_id)
+                    guild_id,
+                    user_id
                 )
             )
 
+            # Reset only this player's stats in active seasons.
+            # Ended season results and archives remain untouched.
+            db.execute(
+                """
+                DELETE FROM season_stats
+                WHERE user_id = ?
+                AND season_id IN (
+                    SELECT id
+                    FROM seasons
+                    WHERE guild_id = ?
+                    AND language IN ('ar', 'en')
+                    AND status = 'active'
+                )
+                """,
+                (
+                    user_id,
+                    guild_id
+                )
+            )
+
+        # Create a fresh track for the selected language.
         db.execute(
             """
             INSERT OR IGNORE INTO progress (
-
                 guild_id,
                 user_id,
                 language
-
             )
-
             VALUES (?, ?, ?)
-
             """,
             (
-                str(guild_id),
-                str(user_id),
+                guild_id,
+                user_id,
                 language
             )
         )
@@ -633,18 +538,15 @@ def select_language(
         db.execute(
             """
             UPDATE players
-
             SET active_language = ?,
                 updated_at = CURRENT_TIMESTAMP
-
             WHERE guild_id = ?
             AND user_id = ?
-
             """,
             (
                 language,
-                str(guild_id),
-                str(user_id)
+                guild_id,
+                user_id
             )
         )
 
@@ -662,13 +564,10 @@ def update_username(guild_id, user_id, username):
         db.execute(
             """
             UPDATE players
-
             SET username = ?,
                 updated_at = CURRENT_TIMESTAMP
-
             WHERE guild_id = ?
             AND user_id = ?
-
             """,
             (
                 username,
@@ -694,26 +593,18 @@ def save_bot_message(
         db.execute(
             """
             INSERT INTO bot_messages (
-
                 guild_id,
                 message_key,
                 channel_id,
                 message_id
-
             )
-
             VALUES (?, ?, ?, ?)
 
             ON CONFLICT(guild_id, message_key)
-
             DO UPDATE SET
-
                 channel_id = excluded.channel_id,
-
                 message_id = excluded.message_id,
-
                 updated_at = CURRENT_TIMESTAMP
-
             """,
             (
                 str(guild_id),
@@ -735,12 +626,9 @@ def get_bot_message(guild_id, message_key):
         return db.execute(
             """
             SELECT *
-
             FROM bot_messages
-
             WHERE guild_id = ?
             AND message_key = ?
-
             """,
             (
                 str(guild_id),
@@ -763,17 +651,12 @@ def get_active_season(guild_id, language):
         return db.execute(
             """
             SELECT *
-
             FROM seasons
-
             WHERE guild_id = ?
             AND language = ?
             AND status = 'active'
-
             ORDER BY id DESC
-
             LIMIT 1
-
             """,
             (
                 str(guild_id),
@@ -783,7 +666,7 @@ def get_active_season(guild_id, language):
 
 
 # ========================================================
-# HEALTH CHECK
+# DATABASE HEALTH CHECK
 # ========================================================
 
 def database_health_check():
