@@ -684,3 +684,175 @@ def database_health_check():
     except sqlite3.Error:
 
         return False
+
+# ========================================================
+# MHN ARCADE V1 - PLAYER CARDS & LEADERBOARDS
+# ========================================================
+
+def get_player_card_data(guild_id, user_id, language):
+
+    if language not in SUPPORTED_LANGUAGES:
+        raise ValueError("Unsupported language.")
+
+    with get_connection() as db:
+
+        return db.execute(
+            """
+            SELECT
+                p.username,
+                p.active_language,
+                pr.level,
+                pr.xp,
+                pr.lifetime_xp,
+                pr.prestige,
+                pr.games_played,
+                pr.wins,
+                pr.losses,
+                pr.draws,
+                pr.current_streak,
+                pr.best_streak,
+                pr.favorite_game
+            FROM players p
+            JOIN progress pr
+                ON pr.guild_id = p.guild_id
+                AND pr.user_id = p.user_id
+            WHERE p.guild_id = ?
+                AND p.user_id = ?
+                AND pr.language = ?
+            """,
+            (str(guild_id), str(user_id), language)
+        ).fetchone()
+
+
+def get_achievement_count(guild_id, user_id, language):
+
+    with get_connection() as db:
+
+        row = db.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM achievements
+            WHERE guild_id = ?
+                AND user_id = ?
+                AND language = ?
+            """,
+            (str(guild_id), str(user_id), language)
+        ).fetchone()
+
+        return row["total"] if row else 0
+
+
+def unlock_achievement(
+    guild_id,
+    user_id,
+    language,
+    achievement_key
+):
+
+    if language not in SUPPORTED_LANGUAGES:
+        raise ValueError("Unsupported language.")
+
+    with get_connection() as db:
+
+        cursor = db.execute(
+            """
+            INSERT OR IGNORE INTO achievements (
+                guild_id,
+                user_id,
+                language,
+                achievement_key
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                str(guild_id),
+                str(user_id),
+                language,
+                achievement_key
+            )
+        )
+
+        return cursor.rowcount == 1
+
+
+def get_all_time_leaderboard(guild_id, language, limit=10):
+
+    if language not in SUPPORTED_LANGUAGES:
+        raise ValueError("Unsupported language.")
+
+    limit = max(1, min(int(limit), 10))
+
+    with get_connection() as db:
+
+        return db.execute(
+            """
+            SELECT
+                p.user_id,
+                p.username,
+                pr.level,
+                pr.xp,
+                pr.lifetime_xp,
+                pr.wins,
+                pr.games_played
+            FROM progress pr
+            JOIN players p
+                ON p.guild_id = pr.guild_id
+                AND p.user_id = pr.user_id
+            WHERE pr.guild_id = ?
+                AND pr.language = ?
+            ORDER BY
+                pr.level DESC,
+                pr.xp DESC,
+                pr.wins DESC,
+                pr.lifetime_xp DESC
+            LIMIT ?
+            """,
+            (str(guild_id), language, limit)
+        ).fetchall()
+
+
+def get_season_leaderboard(guild_id, language, limit=10):
+
+    if language not in SUPPORTED_LANGUAGES:
+        raise ValueError("Unsupported language.")
+
+    limit = max(1, min(int(limit), 10))
+
+    with get_connection() as db:
+
+        season = db.execute(
+            """
+            SELECT id, name
+            FROM seasons
+            WHERE guild_id = ?
+                AND language = ?
+                AND status = 'active'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(guild_id), language)
+        ).fetchone()
+
+        if season is None:
+            return None, []
+
+        rows = db.execute(
+            """
+            SELECT
+                user_id,
+                username,
+                xp,
+                wins,
+                games_played
+            FROM season_stats
+            WHERE season_id = ?
+            ORDER BY
+                xp DESC,
+                wins DESC,
+                games_played DESC
+            LIMIT ?
+            """,
+            (season["id"], limit)
+        ).fetchall()
+
+        return season, rows
