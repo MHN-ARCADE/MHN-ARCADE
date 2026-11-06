@@ -468,15 +468,6 @@ class GameSessionView(discord.ui.View):
             self._rps(); self.embed.description+=f"\n\n{self.tr(f'Last round: {you} vs {bot}',f'الجولة السابقة: {you} ضد {bot}')}"
             return await interaction.response.edit_message(embed=self.embed,view=self)
 
-            if you==bot: pass
-            elif beats[you]==bot: s["you"]+=1
-            else: s["bot"]+=1
-            s["round"]+=1
-            if s["round"]>3 or s["you"]==2 or s["bot"]==2:
-                res="win" if s["you"]>s["bot"] else ("draw" if s["you"]==s["bot"] else "loss")
-                return await self._finish(interaction,res,self.tr(f"You: {you} • Arcade: {bot}\nFinal score {s['you']}–{s['bot']}",f"أنت: {you} • الآركيد: {bot}\nالنتيجة {s['you']}–{s['bot']}"),score=s["you"])
-            self._rps(); self.embed.description+=f"\n\n{self.tr(f'Last round: {you} vs {bot}',f'الجولة السابقة: {you} ضد {bot}')}"
-            return await interaction.response.edit_message(embed=self.embed,view=self)
         if action.startswith("emoji:"):
             idx=int(action.split(":")[1]); ok=s["pool"][idx]==s["target"]
             return await self._finish(interaction,"win" if ok else "loss",self.tr("Found it!","وجدته!") if ok else self.tr("That wasn't the target.","هذا ليس الهدف."),score=1 if ok else 0)
