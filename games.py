@@ -1,7 +1,7 @@
-"""MHN ARCADE V2.0 — interactive single-player arcade engine.
+"""MHN ARCADE V2.0 — public, independent single-player arcade sessions.
 Requires discord.py 2.7.1 and database.record_game_result/get_player/get_game_stats.
-All games are playable solo challenges against the game engine. Multiplayer rooms
-are intentionally not advertised until their lobby/turn system is implemented.
+Each player gets a public menu and game message. Only that player can use its
+controls, and results are always recorded for that player alone.
 """
 
 from __future__ import annotations
@@ -174,7 +174,16 @@ class CategoryButton(discord.ui.Button):
         cat = CATEGORIES[self.category_id]
         name = cat["name_ar"] if self.lang == "ar" else cat["name"]
         desc = f"اختر لعبة من **{name}**." if self.lang == "ar" else f"Choose a game from **{name}**."
-        await interaction.response.edit_message(embed=build_embed(f"{cat['emoji']} {name}", desc), view=GameSelectView(self.category_id, self.owner_id, self.guild_id, self.lang))
+        category_embed = build_embed(f"{cat['emoji']} {name}", desc)
+        category_embed.add_field(
+            name="اللاعب" if self.lang == "ar" else "Player",
+            value=interaction.user.mention,
+            inline=True,
+        )
+        await interaction.response.edit_message(
+            embed=category_embed,
+            view=GameSelectView(self.category_id, self.owner_id, self.guild_id, self.lang),
+        )
 
 
 class ArcadeHomeView(discord.ui.View):
@@ -221,7 +230,13 @@ class GameSessionView(discord.ui.View):
     def add_action(self, label: str, action: str, emoji: str | None = None, style=discord.ButtonStyle.secondary, row: int | None = None):
         self.add_item(ActionButton(self, label, action, emoji=emoji, style=style, row=row))
     def clear_actions(self): self.clear_items()
-    def set_prompt(self, prompt: str, color: int = PURPLE): self.embed = build_embed(self.title(), prompt, color)
+    def set_prompt(self, prompt: str, color: int = PURPLE):
+        self.embed = build_embed(self.title(), prompt, color)
+        self.embed.add_field(
+            name=self.tr("Player", "اللاعب"),
+            value=f"<@{self.player_id}>",
+            inline=True,
+        )
     async def start(self, interaction: discord.Interaction):
         self._render()
         await interaction.response.edit_message(embed=self.embed, view=self)
@@ -400,7 +415,11 @@ class GameSessionView(discord.ui.View):
         for n in range(1,6): self.add_action(f"Tile {n}" if not self.ar else f"مربع {n}", f"safe:{n}", row=(n-1)//3)
         self._render()
     def _render(self):
-        if not hasattr(self,"embed"): self.embed=build_embed(self.title(), self.tr("Choose an action.","اختر حركة."))
+        if not hasattr(self, "embed"):
+            self.embed = build_embed(self.title(), self.tr("Choose an action.", "اختر حركة."))
+        player_field = self.tr("Player", "اللاعب")
+        if not any(field.name == player_field for field in self.embed.fields):
+            self.embed.add_field(name=player_field, value=f"<@{self.player_id}>", inline=True)
 
     async def handle_action(self, interaction: discord.Interaction, action: str):
         if interaction.user.id != self.player_id:
@@ -654,7 +673,17 @@ class ArcadeGames(commands.Cog):
         self.cooldown.update(interaction.user.id)
         lang=get_language(interaction.guild.id,interaction.user.id)
         desc=("أهلًا بك في صالة MHN ARCADE!\n\n🏆 المنافسة والتحديات\n⚡ السرعة وردة الفعل\n🧠 الذكاء والألغاز\n🎲 الحظ والاستراتيجية\n\nاختر فئة للبدء." if lang=="ar" else "Welcome to MHN ARCADE!\n\n🏆 Social & Competition\n⚡ Speed & Reflex\n🧠 Brain & Puzzle\n🎲 Luck & Strategy\n\nChoose a category to begin.")
-        await interaction.response.send_message(embed=build_embed("💜 MHN ARCADE V2.0",desc),view=ArcadeHomeView(interaction.user.id,interaction.guild.id,lang),ephemeral=True)
+        menu_embed = build_embed("💜 MHN ARCADE V2.0", desc)
+        menu_embed.add_field(
+            name="اللاعب" if lang == "ar" else "Player",
+            value=interaction.user.mention,
+            inline=True,
+        )
+        await interaction.response.send_message(
+            embed=menu_embed,
+            view=ArcadeHomeView(interaction.user.id, interaction.guild.id, lang),
+            ephemeral=False,
+        )
 
     @app_commands.command(name="arcade_stats",description="View your arcade game statistics.")
     @app_commands.guild_only()
