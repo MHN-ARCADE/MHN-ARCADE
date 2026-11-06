@@ -4,10 +4,12 @@ MHN ARCADE V2.0
 Database Core - Purple Gaming System 💜
 ========================================================
 
-مهم:
-- يحافظ على قاعدة بيانات V1 الحالية.
+- يحافظ على بيانات قاعدة البيانات الحالية.
 - لا يحذف بيانات اللاعبين أو المواسم أو الإنجازات.
-- يضيف جداول V2.0 بطريقة آمنة.
+- يدعم ترحيل الجداول القديمة بأمان.
+- يدعم XP والمستويات حتى Level 500.
+- يدعم العملات والمحفظة والبنك.
+- يدعم إحصائيات الألعاب والمواسم.
 ========================================================
 """
 
@@ -37,7 +39,11 @@ MAX_LEVEL = 500
 def get_connection():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    connection = sqlite3.connect(DB_PATH, timeout=30)
+    connection = sqlite3.connect(
+        DB_PATH,
+        timeout=30
+    )
+
     connection.row_factory = sqlite3.Row
 
     connection.execute("PRAGMA foreign_keys = ON")
@@ -53,6 +59,160 @@ def get_connection():
 
     finally:
         connection.close()
+
+
+# ========================================================
+# INTERNAL HELPERS
+# ========================================================
+
+def _validate_language(language):
+    if language not in SUPPORTED_LANGUAGES:
+        raise ValueError("Unsupported language.")
+
+
+def _ensure_player(db, guild_id, user_id, username):
+    db.execute(
+        """
+        INSERT INTO players (
+            guild_id, user_id, username
+        )
+        VALUES (?, ?, ?)
+        ON CONFLICT(guild_id, user_id)
+        DO UPDATE SET
+            username = excluded.username,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (str(guild_id), str(user_id), str(username))
+    )
+
+    db.execute(
+        """
+        INSERT OR IGNORE INTO wallets (
+            guild_id, user_id, coins
+        )
+        VALUES (?, ?, ?)
+        """,
+        (str(guild_id), str(user_id), STARTING_COINS)
+    )
+
+
+def _ensure_progress(db, guild_id, user_id, language):
+    _validate_language(language)
+
+    db.execute(
+        """
+        INSERT OR IGNORE INTO progress (
+            guild_id, user_id, language
+        )
+        VALUES (?, ?, ?)
+        """,
+        (str(guild_id), str(user_id), language)
+    )
+
+
+def _ensure_wallet(db, guild_id, user_id):
+    guild_id = str(guild_id)
+    user_id = str(user_id)
+
+    player = db.execute(
+        """
+        SELECT 1
+        FROM players
+        WHERE guild_id = ? AND user_id = ?
+        """,
+        (guild_id, user_id)
+    ).fetchone()
+
+    if player is None:
+        _ensure_player(db, guild_id, user_id, user_id)
+
+    db.execute(
+        """
+        INSERT OR IGNORE INTO wallets (
+            guild_id, user_id, coins
+        )
+        VALUES (?, ?, ?)
+        """,
+        (guild_id, user_id, STARTING_COINS)
+    )
+
+
+def _get_wallet_dict(db, guild_id, user_id):
+    row = db.execute(
+        """
+        SELECT coins, bank
+        FROM wallets
+        WHERE guild_id = ? AND user_id = ?
+        """,
+        (str(guild_id), str(user_id))
+    ).fetchone()
+
+    return dict(row) if row else {
+        "coins": STARTING_COINS,
+        "bank": 0
+    }
+
+
+def _apply_xp(db, guild_id, user_id, language, amount):
+    _ensure_progress(db, guild_id, user_id, language)
+
+    row = db.execute(
+        """
+        SELECT level, xp, lifetime_xp
+        FROM progress
+        WHERE guild_id = ? AND user_id = ? AND language = ?
+        """,
+        (str(guild_id), str(user_id), language)
+    ).fetchone()
+
+    level = int(row["level"])
+    xp = int(row["xp"]) + amount
+    lifetime_xp = int(row["lifetime_xp"]) + amount
+
+    levels_gained = 0
+
+    while level < MAX_LEVEL:
+        required = xp_required_for_next_level(level)
+
+        if xp < required:
+            break
+
+        xp -= required
+        level += 1
+        levels_gained += 1
+
+    if level >= MAX_LEVEL:
+        xp = min(
+            xp,
+            xp_required_for_next_level(level) - 1
+        )
+
+    db.execute(
+        """
+        UPDATE progress
+        SET level = ?,
+            xp = ?,
+            lifetime_xp = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE guild_id = ? AND user_id = ? AND language = ?
+        """,
+        (
+            level,
+            xp,
+            lifetime_xp,
+            str(guild_id),
+            str(user_id),
+            language
+        )
+    )
+
+    return {
+        "level": level,
+        "xp": xp,
+        "lifetime_xp": lifetime_xp,
+        "levels_gained": levels_gained,
+        "next_level_xp": xp_required_for_next_level(level)
+    }
 
 
 # ========================================================
@@ -87,7 +247,9 @@ def archive_legacy_tables(db):
 
         columns = {
             row["name"]
-            for row in db.execute(f"PRAGMA table_info({table})")
+            for row in db.execute(
+                f"PRAGMA table_info({table})"
+            )
         }
 
         if "guild_id" in columns:
@@ -104,8 +266,8 @@ def archive_legacy_tables(db):
 
         if archive_exists:
             raise RuntimeError(
-                f"Migration stopped: {table} and {archive_name} both exist. "
-                "Back up the database before proceeding."
+                f"Migration stopped: {table} and {archive_name} "
+                "both exist. Back up the database before proceeding."
             )
 
         db.execute(
@@ -264,11 +426,6 @@ def initialize_database():
             CREATE INDEX IF NOT EXISTS progress_leaderboard_idx
             ON progress(guild_id, language, level DESC, xp DESC);
 
-
-            /* ==========================================
-               V2.0 - PLAYER WALLETS
-            ========================================== */
-
             CREATE TABLE IF NOT EXISTS wallets (
                 guild_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
@@ -283,11 +440,6 @@ def initialize_database():
                     ON DELETE CASCADE
             );
 
-
-            /* ==========================================
-               V2.0 - CHARACTER SELECTION
-            ========================================== */
-
             CREATE TABLE IF NOT EXISTS selected_characters (
                 guild_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
@@ -298,11 +450,6 @@ def initialize_database():
                     REFERENCES players(guild_id, user_id)
                     ON DELETE CASCADE
             );
-
-
-            /* ==========================================
-               V2.0 - GAME STATISTICS
-            ========================================== */
 
             CREATE TABLE IF NOT EXISTS game_stats (
                 guild_id TEXT NOT NULL,
@@ -321,11 +468,6 @@ def initialize_database():
                     ON DELETE CASCADE
             );
 
-
-            /* ==========================================
-               V2.0 - WALLET TRANSACTIONS
-            ========================================== */
-
             CREATE TABLE IF NOT EXISTS wallet_transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 guild_id TEXT NOT NULL,
@@ -335,7 +477,6 @@ def initialize_database():
                 description TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
-
 
             CREATE INDEX IF NOT EXISTS wallet_history_idx
             ON wallet_transactions(guild_id, user_id, id DESC);
@@ -354,29 +495,12 @@ def initialize_database():
 
 def create_player(guild_id, user_id, username):
 
-    guild_id = str(guild_id)
-    user_id = str(user_id)
-
     with get_connection() as db:
-
-        db.execute(
-            """
-            INSERT INTO players (guild_id, user_id, username)
-            VALUES (?, ?, ?)
-            ON CONFLICT(guild_id, user_id)
-            DO UPDATE SET
-                username = excluded.username,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (guild_id, user_id, username)
-        )
-
-        db.execute(
-            """
-            INSERT OR IGNORE INTO wallets (guild_id, user_id, coins)
-            VALUES (?, ?, ?)
-            """,
-            (guild_id, user_id, STARTING_COINS)
+        _ensure_player(
+            db,
+            str(guild_id),
+            str(user_id),
+            str(username)
         )
 
 
@@ -402,7 +526,7 @@ def update_username(guild_id, user_id, username):
             SET username = ?, updated_at = CURRENT_TIMESTAMP
             WHERE guild_id = ? AND user_id = ?
             """,
-            (username, str(guild_id), str(user_id))
+            (str(username), str(guild_id), str(user_id))
         )
 
 
@@ -412,25 +536,15 @@ def update_username(guild_id, user_id, username):
 
 def ensure_progress(guild_id, user_id, language):
 
-    if language not in SUPPORTED_LANGUAGES:
-        raise ValueError("Unsupported language.")
+    _validate_language(language)
 
     with get_connection() as db:
-        db.execute(
-            """
-            INSERT OR IGNORE INTO progress (
-                guild_id, user_id, language
-            )
-            VALUES (?, ?, ?)
-            """,
-            (str(guild_id), str(user_id), language)
-        )
+        _ensure_progress(db, guild_id, user_id, language)
 
 
 def get_progress(guild_id, user_id, language):
 
-    if language not in SUPPORTED_LANGUAGES:
-        raise ValueError("Unsupported language.")
+    _validate_language(language)
 
     with get_connection() as db:
         return db.execute(
@@ -448,37 +562,18 @@ def select_language(guild_id, user_id, username, language):
     First selection creates a progress track.
 
     Switching language resets both language progress tracks
-    and active season stats, while keeping ended seasons and
-    owner-granted titles.
+    and active season stats, while keeping ended seasons,
+    wallet, character selection and owner-granted titles.
     """
 
-    if language not in SUPPORTED_LANGUAGES:
-        raise ValueError("Unsupported language.")
+    _validate_language(language)
 
     guild_id = str(guild_id)
     user_id = str(user_id)
 
     with get_connection() as db:
 
-        db.execute(
-            """
-            INSERT INTO players (guild_id, user_id, username)
-            VALUES (?, ?, ?)
-            ON CONFLICT(guild_id, user_id)
-            DO UPDATE SET
-                username = excluded.username,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (guild_id, user_id, username)
-        )
-
-        db.execute(
-            """
-            INSERT OR IGNORE INTO wallets (guild_id, user_id, coins)
-            VALUES (?, ?, ?)
-            """,
-            (guild_id, user_id, STARTING_COINS)
-        )
+        _ensure_player(db, guild_id, user_id, username)
 
         player = db.execute(
             """
@@ -521,15 +616,7 @@ def select_language(guild_id, user_id, username, language):
                 (user_id, guild_id)
             )
 
-        db.execute(
-            """
-            INSERT OR IGNORE INTO progress (
-                guild_id, user_id, language
-            )
-            VALUES (?, ?, ?)
-            """,
-            (guild_id, user_id, language)
-        )
+        _ensure_progress(db, guild_id, user_id, language)
 
         db.execute(
             """
@@ -560,64 +647,21 @@ def award_xp(guild_id, user_id, language, amount):
     Returns a dictionary with the updated progress.
     """
 
-    if language not in SUPPORTED_LANGUAGES:
-        raise ValueError("Unsupported language.")
+    _validate_language(language)
 
     amount = max(0, int(amount))
 
-    ensure_progress(guild_id, user_id, language)
-
     with get_connection() as db:
 
-        row = db.execute(
-            """
-            SELECT level, xp, lifetime_xp
-            FROM progress
-            WHERE guild_id = ? AND user_id = ? AND language = ?
-            """,
-            (str(guild_id), str(user_id), language)
-        ).fetchone()
+        _ensure_progress(db, guild_id, user_id, language)
 
-        level = int(row["level"])
-        xp = int(row["xp"]) + amount
-        lifetime_xp = int(row["lifetime_xp"]) + amount
-        levels_gained = 0
-
-        while level < MAX_LEVEL:
-            required = xp_required_for_next_level(level)
-
-            if xp < required:
-                break
-
-            xp -= required
-            level += 1
-            levels_gained += 1
-
-        if level >= MAX_LEVEL:
-            xp = min(xp, xp_required_for_next_level(level) - 1)
-
-        db.execute(
-            """
-            UPDATE progress
-            SET level = ?,
-                xp = ?,
-                lifetime_xp = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE guild_id = ? AND user_id = ? AND language = ?
-            """,
-            (
-                level, xp, lifetime_xp,
-                str(guild_id), str(user_id), language
-            )
+        return _apply_xp(
+            db,
+            guild_id,
+            user_id,
+            language,
+            amount
         )
-
-        return {
-            "level": level,
-            "xp": xp,
-            "lifetime_xp": lifetime_xp,
-            "levels_gained": levels_gained,
-            "next_level_xp": xp_required_for_next_level(level)
-        }
 
 
 # ========================================================
@@ -636,37 +680,72 @@ def record_game_result(
     score=0
 ):
     """
-    Records one completed game.
+    Records one completed game atomically.
 
     result must be: win, loss, or draw.
-    XP and coins are clamped to non-negative values.
+
+    All related updates are saved in one transaction:
+    - Game statistics
+    - Player progress and streaks
+    - XP and level-ups
+    - Wallet rewards
+    - Active season statistics
+
+    A zero-coin reward is valid and does not create
+    a wallet transaction.
     """
 
-    if language not in SUPPORTED_LANGUAGES:
-        raise ValueError("Unsupported language.")
+    _validate_language(language)
 
     if result not in ("win", "loss", "draw"):
         raise ValueError("Invalid game result.")
+
+    game_id = str(game_id).strip()
+
+    if not game_id:
+        raise ValueError("Game ID cannot be empty.")
 
     xp_reward = max(0, int(xp_reward))
     coin_reward = max(0, int(coin_reward))
     score = max(0, int(score))
 
-    create_player(guild_id, user_id, username)
-    ensure_progress(guild_id, user_id, language)
-
     guild_id = str(guild_id)
     user_id = str(user_id)
+    username = str(username)
 
     with get_connection() as db:
 
+        # Ensure player, wallet and progress exist.
+        _ensure_player(
+            db,
+            guild_id,
+            user_id,
+            username
+        )
+
+        _ensure_progress(
+            db,
+            guild_id,
+            user_id,
+            language
+        )
+
+        # Update per-game statistics.
         db.execute(
             """
             INSERT INTO game_stats (
-                guild_id, user_id, game_id, games_played,
-                wins, losses, draws, best_score, total_score
+                guild_id,
+                user_id,
+                game_id,
+                games_played,
+                wins,
+                losses,
+                draws,
+                best_score,
+                total_score
             )
             VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+
             ON CONFLICT(guild_id, user_id, game_id)
             DO UPDATE SET
                 games_played = games_played + 1,
@@ -678,21 +757,18 @@ def record_game_result(
                 updated_at = CURRENT_TIMESTAMP
             """,
             (
-                guild_id, user_id, game_id,
+                guild_id,
+                user_id,
+                game_id,
                 int(result == "win"),
                 int(result == "loss"),
                 int(result == "draw"),
-                score, score
+                score,
+                score
             )
         )
 
-        if result == "win":
-            streak_change = 1
-        elif result == "loss":
-            streak_change = -1
-        else:
-            streak_change = 0
-
+        # Update streaks.
         progress = db.execute(
             """
             SELECT current_streak, best_streak
@@ -708,9 +784,11 @@ def record_game_result(
         if result == "win":
             current_streak += 1
             best_streak = max(best_streak, current_streak)
+
         elif result == "loss":
             current_streak = 0
 
+        # Update overall progress statistics.
         db.execute(
             """
             UPDATE progress
@@ -731,28 +809,90 @@ def record_game_result(
                 current_streak,
                 best_streak,
                 game_id,
-                guild_id, user_id, language
+                guild_id,
+                user_id,
+                language
             )
         )
 
+        # Apply XP inside this same transaction.
+        xp_result = _apply_xp(
+            db,
+            guild_id,
+            user_id,
+            language,
+            xp_reward
+        )
+
+        # Apply coins only when the reward is positive.
+        # Zero coins is a valid reward, not an error.
+        if coin_reward > 0:
+
+            db.execute(
+                """
+                UPDATE wallets
+                SET coins = coins + ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE guild_id = ? AND user_id = ?
+                """,
+                (coin_reward, guild_id, user_id)
+            )
+
+            db.execute(
+                """
+                INSERT INTO wallet_transactions (
+                    guild_id,
+                    user_id,
+                    transaction_type,
+                    amount,
+                    description
+                )
+                VALUES (?, ?, 'earn', ?, ?)
+                """,
+                (
+                    guild_id,
+                    user_id,
+                    coin_reward,
+                    f"Game reward: {game_id}"
+                )
+            )
+
+        wallet_result = _get_wallet_dict(
+            db,
+            guild_id,
+            user_id
+        )
+
+        # Update active season statistics.
         active_season = db.execute(
             """
             SELECT id
             FROM seasons
-            WHERE guild_id = ? AND language = ? AND status = 'active'
-            ORDER BY id DESC LIMIT 1
+            WHERE guild_id = ?
+                AND language = ?
+                AND status = 'active'
+            ORDER BY id DESC
+            LIMIT 1
             """,
             (guild_id, language)
         ).fetchone()
 
         if active_season:
+
             db.execute(
                 """
                 INSERT INTO season_stats (
-                    season_id, user_id, username, xp,
-                    wins, losses, draws, games_played
+                    season_id,
+                    user_id,
+                    username,
+                    xp,
+                    wins,
+                    losses,
+                    draws,
+                    games_played
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+
                 ON CONFLICT(season_id, user_id)
                 DO UPDATE SET
                     username = excluded.username,
@@ -772,12 +912,6 @@ def record_game_result(
                     int(result == "draw")
                 )
             )
-
-    xp_result = award_xp(guild_id, user_id, language, xp_reward)
-    wallet_result = add_coins(
-        guild_id, user_id, coin_reward,
-        description=f"Game reward: {game_id}"
-    )
 
     return {
         "result": result,
@@ -819,26 +953,16 @@ def get_game_stats(guild_id, user_id, game_id=None):
 
 def ensure_wallet(guild_id, user_id):
 
-    player = get_player(guild_id, user_id)
-
-    if player is None:
-        create_player(guild_id, user_id, str(user_id))
-
     with get_connection() as db:
-        db.execute(
-            """
-            INSERT OR IGNORE INTO wallets (guild_id, user_id, coins)
-            VALUES (?, ?, ?)
-            """,
-            (str(guild_id), str(user_id), STARTING_COINS)
-        )
+        _ensure_wallet(db, guild_id, user_id)
 
 
 def get_wallet(guild_id, user_id):
 
-    ensure_wallet(guild_id, user_id)
-
     with get_connection() as db:
+
+        _ensure_wallet(db, guild_id, user_id)
+
         return db.execute(
             """
             SELECT coins, bank
@@ -856,14 +980,15 @@ def add_coins(guild_id, user_id, amount, description="Reward"):
     if amount <= 0:
         raise ValueError("Amount must be positive.")
 
-    ensure_wallet(guild_id, user_id)
-
     with get_connection() as db:
+
+        _ensure_wallet(db, guild_id, user_id)
 
         db.execute(
             """
             UPDATE wallets
-            SET coins = coins + ?, updated_at = CURRENT_TIMESTAMP
+            SET coins = coins + ?,
+                updated_at = CURRENT_TIMESTAMP
             WHERE guild_id = ? AND user_id = ?
             """,
             (amount, str(guild_id), str(user_id))
@@ -872,22 +997,27 @@ def add_coins(guild_id, user_id, amount, description="Reward"):
         db.execute(
             """
             INSERT INTO wallet_transactions (
-                guild_id, user_id, transaction_type, amount, description
+                guild_id,
+                user_id,
+                transaction_type,
+                amount,
+                description
             )
             VALUES (?, ?, 'earn', ?, ?)
             """,
-            (str(guild_id), str(user_id), amount, description)
+            (
+                str(guild_id),
+                str(user_id),
+                amount,
+                str(description)
+            )
         )
 
-        row = db.execute(
-            """
-            SELECT coins, bank FROM wallets
-            WHERE guild_id = ? AND user_id = ?
-            """,
-            (str(guild_id), str(user_id))
-        ).fetchone()
-
-        return dict(row)
+        return _get_wallet_dict(
+            db,
+            guild_id,
+            user_id
+        )
 
 
 def remove_coins(guild_id, user_id, amount, description="Purchase"):
@@ -897,17 +1027,23 @@ def remove_coins(guild_id, user_id, amount, description="Purchase"):
     if amount <= 0:
         raise ValueError("Amount must be positive.")
 
-    ensure_wallet(guild_id, user_id)
-
     with get_connection() as db:
+
+        _ensure_wallet(db, guild_id, user_id)
 
         cursor = db.execute(
             """
             UPDATE wallets
-            SET coins = coins - ?, updated_at = CURRENT_TIMESTAMP
+            SET coins = coins - ?,
+                updated_at = CURRENT_TIMESTAMP
             WHERE guild_id = ? AND user_id = ? AND coins >= ?
             """,
-            (amount, str(guild_id), str(user_id), amount)
+            (
+                amount,
+                str(guild_id),
+                str(user_id),
+                amount
+            )
         )
 
         if cursor.rowcount != 1:
@@ -916,11 +1052,20 @@ def remove_coins(guild_id, user_id, amount, description="Purchase"):
         db.execute(
             """
             INSERT INTO wallet_transactions (
-                guild_id, user_id, transaction_type, amount, description
+                guild_id,
+                user_id,
+                transaction_type,
+                amount,
+                description
             )
             VALUES (?, ?, 'spend', ?, ?)
             """,
-            (str(guild_id), str(user_id), amount, description)
+            (
+                str(guild_id),
+                str(user_id),
+                amount,
+                str(description)
+            )
         )
 
         return True
@@ -937,9 +1082,9 @@ def deposit_coins(guild_id, user_id, amount):
     if amount <= 0:
         return False
 
-    ensure_wallet(guild_id, user_id)
-
     with get_connection() as db:
+
+        _ensure_wallet(db, guild_id, user_id)
 
         cursor = db.execute(
             """
@@ -950,8 +1095,11 @@ def deposit_coins(guild_id, user_id, amount):
             WHERE guild_id = ? AND user_id = ? AND coins >= ?
             """,
             (
-                amount, amount,
-                str(guild_id), str(user_id), amount
+                amount,
+                amount,
+                str(guild_id),
+                str(user_id),
+                amount
             )
         )
 
@@ -961,7 +1109,11 @@ def deposit_coins(guild_id, user_id, amount):
         db.execute(
             """
             INSERT INTO wallet_transactions (
-                guild_id, user_id, transaction_type, amount, description
+                guild_id,
+                user_id,
+                transaction_type,
+                amount,
+                description
             )
             VALUES (?, ?, 'deposit', ?, 'Bank deposit')
             """,
@@ -978,9 +1130,9 @@ def withdraw_coins(guild_id, user_id, amount):
     if amount <= 0:
         return False
 
-    ensure_wallet(guild_id, user_id)
-
     with get_connection() as db:
+
+        _ensure_wallet(db, guild_id, user_id)
 
         cursor = db.execute(
             """
@@ -991,8 +1143,11 @@ def withdraw_coins(guild_id, user_id, amount):
             WHERE guild_id = ? AND user_id = ? AND bank >= ?
             """,
             (
-                amount, amount,
-                str(guild_id), str(user_id), amount
+                amount,
+                amount,
+                str(guild_id),
+                str(user_id),
+                amount
             )
         )
 
@@ -1002,7 +1157,11 @@ def withdraw_coins(guild_id, user_id, amount):
         db.execute(
             """
             INSERT INTO wallet_transactions (
-                guild_id, user_id, transaction_type, amount, description
+                guild_id,
+                user_id,
+                transaction_type,
+                amount,
+                description
             )
             VALUES (?, ?, 'withdraw', ?, 'Bank withdrawal')
             """,
@@ -1040,24 +1199,34 @@ def select_character(guild_id, user_id, character_id):
     if not character_id:
         raise ValueError("Character ID cannot be empty.")
 
-    player = get_player(guild_id, user_id)
-
-    if player is None:
-        create_player(guild_id, user_id, str(user_id))
-
     with get_connection() as db:
+
+        _ensure_player(
+            db,
+            guild_id,
+            user_id,
+            str(user_id)
+        )
+
         db.execute(
             """
             INSERT INTO selected_characters (
-                guild_id, user_id, character_id
+                guild_id,
+                user_id,
+                character_id
             )
             VALUES (?, ?, ?)
+
             ON CONFLICT(guild_id, user_id)
             DO UPDATE SET
                 character_id = excluded.character_id,
                 selected_at = CURRENT_TIMESTAMP
             """,
-            (str(guild_id), str(user_id), character_id)
+            (
+                str(guild_id),
+                str(user_id),
+                character_id
+            )
         )
 
     return True
@@ -1082,6 +1251,8 @@ def get_selected_character(guild_id, user_id):
 
 def get_achievement_count(guild_id, user_id, language):
 
+    _validate_language(language)
+
     with get_connection() as db:
         row = db.execute(
             """
@@ -1102,14 +1273,37 @@ def unlock_achievement(
     achievement_key
 ):
 
-    if language not in SUPPORTED_LANGUAGES:
-        raise ValueError("Unsupported language.")
+    _validate_language(language)
+
+    achievement_key = str(achievement_key).strip()
+
+    if not achievement_key:
+        raise ValueError("Achievement key cannot be empty.")
 
     with get_connection() as db:
+
+        # Prevent foreign-key errors for unregistered players.
+        _ensure_player(
+            db,
+            guild_id,
+            user_id,
+            str(user_id)
+        )
+
+        _ensure_progress(
+            db,
+            guild_id,
+            user_id,
+            language
+        )
+
         cursor = db.execute(
             """
             INSERT OR IGNORE INTO achievements (
-                guild_id, user_id, language, achievement_key
+                guild_id,
+                user_id,
+                language,
+                achievement_key
             )
             VALUES (?, ?, ?, ?)
             """,
@@ -1130,8 +1324,7 @@ def unlock_achievement(
 
 def get_player_card_data(guild_id, user_id, language):
 
-    if language not in SUPPORTED_LANGUAGES:
-        raise ValueError("Unsupported language.")
+    _validate_language(language)
 
     with get_connection() as db:
         return db.execute(
@@ -1177,9 +1370,13 @@ def save_bot_message(
         db.execute(
             """
             INSERT INTO bot_messages (
-                guild_id, message_key, channel_id, message_id
+                guild_id,
+                message_key,
+                channel_id,
+                message_id
             )
             VALUES (?, ?, ?, ?)
+
             ON CONFLICT(guild_id, message_key)
             DO UPDATE SET
                 channel_id = excluded.channel_id,
@@ -1188,7 +1385,7 @@ def save_bot_message(
             """,
             (
                 str(guild_id),
-                message_key,
+                str(message_key),
                 str(channel_id),
                 str(message_id)
             )
@@ -1204,7 +1401,7 @@ def get_bot_message(guild_id, message_key):
             FROM bot_messages
             WHERE guild_id = ? AND message_key = ?
             """,
-            (str(guild_id), message_key)
+            (str(guild_id), str(message_key))
         ).fetchone()
 
 
@@ -1214,8 +1411,7 @@ def get_bot_message(guild_id, message_key):
 
 def get_active_season(guild_id, language):
 
-    if language not in SUPPORTED_LANGUAGES:
-        raise ValueError("Unsupported language.")
+    _validate_language(language)
 
     with get_connection() as db:
         return db.execute(
@@ -1234,8 +1430,7 @@ def get_active_season(guild_id, language):
 
 def get_all_time_leaderboard(guild_id, language, limit=10):
 
-    if language not in SUPPORTED_LANGUAGES:
-        raise ValueError("Unsupported language.")
+    _validate_language(language)
 
     limit = max(1, min(int(limit), 10))
 
@@ -1268,8 +1463,7 @@ def get_all_time_leaderboard(guild_id, language, limit=10):
 
 def get_season_leaderboard(guild_id, language, limit=10):
 
-    if language not in SUPPORTED_LANGUAGES:
-        raise ValueError("Unsupported language.")
+    _validate_language(language)
 
     limit = max(1, min(int(limit), 10))
 
@@ -1318,8 +1512,11 @@ def database_health_check():
 
     try:
         with get_connection() as db:
-            result = db.execute("PRAGMA integrity_check").fetchone()
-            return result[0] == "ok"
+            result = db.execute(
+                "PRAGMA integrity_check"
+            ).fetchone()
+
+            return bool(result and result[0] == "ok")
 
     except sqlite3.Error:
         return False
