@@ -636,7 +636,32 @@ class GameSessionView(discord.ui.View):
         for item in self.children: item.disabled=True
         xp, coins = {"win":(25,15),"draw":(12,5),"loss":(8,0)}[result]
         try:
-            record_game_result(guild_id=self.guild_id,user_id=self.player_id,username=interaction.user.display_name,language=self.lang,game_id=self.game_id,result=result,xp_reward=xp,coin_reward=coins,score=max(0,int(score)))
+            record_game_result(
+                guild_id=self.guild_id,
+                user_id=self.player_id,
+                username=interaction.user.display_name,
+                language=self.lang,
+                game_id=self.game_id,
+                result=result,
+                xp_reward=xp,
+                coin_reward=coins,
+                score=max(0, int(score)),
+            )
+
+            # Notify main.py after the database successfully records the result.
+            # The main.py listener refreshes the leaderboard and the player's card.
+            try:
+                interaction.client.dispatch(
+                    "arcade_game_finished",
+                    self.guild_id,
+                    self.player_id,
+                    self.lang,
+                    result,
+                    self.game_id,
+                )
+            except Exception:
+                log.exception("Could not dispatch arcade_game_finished for %s", self.game_id)
+
             heading={"win":self.tr("🏆 Victory!","🏆 فوز!"),"draw":self.tr("🤝 Draw!","🤝 تعادل!"),"loss":self.tr("🎮 Round complete","🎮 انتهت الجولة")}[result]
             desc=f"{detail}\n\n{self.tr(f'Rewards: +{xp} XP • +{coins} coins',f'المكافآت: +{xp} خبرة • +{coins} عملة')}"
             e=build_embed(heading,desc,{"win":GREEN,"draw":GOLD,"loss":RED}[result])
