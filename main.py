@@ -1,7 +1,31 @@
+
 """
 ========================================================
-MHN ARCADE V1
+MHN ARCADE V2.0
 Main Bot Engine 💜
+========================================================
+
+Features:
+- Arabic and English welcome messages
+- Player registration
+- Language selection
+- Player cards
+- Character selection
+- Arcade games extension
+- XP and level progression
+- Wallet and bank
+- All-time and seasonal leaderboards
+- Achievement announcements
+- Persistent Discord messages
+
+Environment:
+    DISCORD_TOKEN
+
+Files:
+    main.py
+    database.py
+    games.py
+    characters.py
 ========================================================
 """
 
@@ -25,8 +49,21 @@ from database import (
     unlock_achievement,
     get_all_time_leaderboard,
     get_season_leaderboard,
+    get_wallet,
+    deposit_coins,
+    withdraw_coins,
+    get_selected_character,
+    select_character,
+    xp_required_for_next_level,
 )
 
+from characters import (
+    CHARACTERS,
+    CATEGORY_ANIME,
+    CATEGORY_NETFLIX,
+    get_character,
+    get_characters_by_category,
+)
 
 # ========================================================
 # CONFIGURATION
@@ -45,6 +82,7 @@ LEADERBOARD_CHANNEL_ID = 1567720123106857142
 ACHIEVEMENTS_CHANNEL_ID = 1567722630969303090
 
 PURPLE = 0x7C3AED
+VERSION = "V2.0"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,7 +112,7 @@ class MHNArcadeBot(commands.Bot):
             command_prefix="!",
             intents=intents,
             activity=discord.Game(
-                name="MHN ARCADE V1 🎮"
+                name="MHN ARCADE V2.0 🎮"
             )
         )
 
@@ -82,8 +120,11 @@ class MHNArcadeBot(commands.Bot):
 
         initialize_database()
 
-        # Persistent button survives bot restarts.
+        # Persistent player card button.
         self.add_view(PlayerCardPanelView())
+
+        # Load the arcade games engine.
+        await self.load_extension("games")
 
         synced = await self.tree.sync()
 
@@ -97,440 +138,33 @@ bot = MHNArcadeBot()
 
 
 # ========================================================
-# WELCOME EMBEDS
+# GENERAL HELPERS
 # ========================================================
 
-def create_arabic_welcome():
+def build_embed(title, description, color=PURPLE):
 
     embed = discord.Embed(
-        title="🎮 حياك في MHN ARCADE!",
-        description=(
-            "هنا جمعنا لك المتعة والتحدي بمكان واحد!\n"
-            "العب، اختبر مهاراتك، وتحدا أصحابك في مجموعة "
-            "ألعاب متنوعة، وكل لعبة لها جوها الخاص. 🕹️\n\n"
-            "🏆 اجمع النقاط، نافس غيرك، وخل اسمك يتصدر بالقائمة!\n\n"
-            "**PLAY • COMPETE • WIN**\n"
-            "**YOUR GAME YOUR CHALLENGE.**\n\n"
-            "💜 **MHN ARCADE V1 — LET THE FUN BEGIN!**\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "📌 **ملاحظة:** مع الوقت راح يرتفع الإصدار "
-            "وتنضاف ألعاب ومميزات جديدة.\n"
-            "هذا هو الإصدار الأول **V1**."
-        ),
-        color=PURPLE
+        title=title,
+        description=description,
+        color=color
     )
 
     embed.set_footer(
-        text="MHN ARCADE V1 • PLAY • COMPETE • WIN"
+        text=f"MHN ARCADE {VERSION} • PLAY • COMPETE • WIN"
     )
 
     return embed
 
 
-def create_english_welcome():
+def get_language(guild_id, user_id):
 
-    embed = discord.Embed(
-        title="🎮 Welcome to MHN ARCADE!",
-        description=(
-            "We've brought fun and challenges together "
-            "in one place!\n"
-            "Play, test your skills, and challenge your "
-            "friends across a variety of games. 🕹️\n\n"
-            "🏆 Earn points, compete with others, "
-            "and climb to the top of the leaderboard!\n\n"
-            "**PLAY • COMPETE • WIN**\n"
-            "**YOUR GAME YOUR CHALLENGE.**\n\n"
-            "💜 **MHN ARCADE V1 — LET THE FUN BEGIN!**\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "📌 **Note:** New versions, games, and features "
-            "will be added over time.\n"
-            "This is the initial release: **V1**."
-        ),
-        color=PURPLE
-    )
+    player = get_player(guild_id, user_id)
 
-    embed.set_footer(
-        text="MHN ARCADE V1 • PLAY • COMPETE • WIN"
-    )
+    if player and player["active_language"] in ("ar", "en"):
+        return player["active_language"]
 
-    return embed
+    return None
 
-
-# ========================================================
-# WELCOME MESSAGE MANAGER
-# ========================================================
-
-async def ensure_welcome_message(
-    guild: discord.Guild,
-    message_key: str,
-    channel_id: int,
-    embed: discord.Embed
-):
-
-    saved_message = get_bot_message(
-        guild.id,
-        message_key
-    )
-
-    if saved_message:
-
-        try:
-
-            saved_channel = await bot.fetch_channel(
-                int(saved_message["channel_id"])
-            )
-
-            if not hasattr(saved_channel, "fetch_message"):
-                logger.error(
-                    "Saved welcome destination cannot fetch messages: %s",
-                    message_key
-                )
-                return False
-
-            await saved_channel.fetch_message(
-                int(saved_message["message_id"])
-            )
-
-            logger.info(
-                "Welcome message already exists: %s",
-                message_key
-            )
-
-            return True
-
-        except discord.NotFound:
-
-            logger.warning(
-                "Saved welcome message was deleted: %s",
-                message_key
-            )
-
-        except discord.Forbidden:
-
-            logger.error(
-                "Missing permission to read saved welcome message: %s",
-                message_key
-            )
-
-            return False
-
-        except discord.HTTPException as error:
-
-            logger.error(
-                "Could not verify saved welcome message: %s",
-                error
-            )
-
-            return False
-
-    channel = bot.get_channel(channel_id)
-
-    if channel is None:
-
-        try:
-
-            channel = await bot.fetch_channel(channel_id)
-
-        except discord.NotFound:
-
-            logger.error(
-                "Welcome channel does not exist: %s",
-                channel_id
-            )
-
-            return False
-
-        except discord.Forbidden:
-
-            logger.error(
-                "Missing permission to access welcome channel: %s",
-                channel_id
-            )
-
-            return False
-
-        except discord.HTTPException as error:
-
-            logger.error(
-                "Failed to fetch welcome channel: %s",
-                error
-            )
-
-            return False
-
-    if not isinstance(channel, discord.TextChannel):
-        logger.error("Welcome destination is not a text channel.")
-        return False
-
-    if channel.guild.id != guild.id:
-        return False
-
-    try:
-
-        message = await channel.send(embed=embed)
-
-        save_bot_message(
-            guild.id,
-            message_key,
-            channel.id,
-            message.id
-        )
-
-        logger.info(
-            "Welcome message sent: %s",
-            message_key
-        )
-
-        return True
-
-    except discord.Forbidden:
-
-        logger.error(
-            "Missing permission to send welcome message in %s",
-            channel.name
-        )
-
-        return False
-
-    except discord.HTTPException as error:
-
-        logger.error(
-            "Failed to send welcome message: %s",
-            error
-        )
-
-        return False
-
-
-async def initialize_welcome_messages_for_guild(guild):
-
-    arabic_success = await ensure_welcome_message(
-        guild=guild,
-        message_key="welcome_ar",
-        channel_id=ARABIC_ARCADE_CHANNEL_ID,
-        embed=create_arabic_welcome()
-    )
-
-    english_success = await ensure_welcome_message(
-        guild=guild,
-        message_key="welcome_en",
-        channel_id=ENGLISH_ARCADE_CHANNEL_ID,
-        embed=create_english_welcome()
-    )
-
-    return arabic_success and english_success
-
-
-async def initialize_welcome_messages():
-
-    all_successful = True
-
-    for guild in bot.guilds:
-
-        success = await initialize_welcome_messages_for_guild(guild)
-
-        if not success:
-            all_successful = False
-
-    return all_successful
-
-
-# ========================================================
-# PERSISTENT MESSAGE MANAGER
-# ========================================================
-
-async def ensure_saved_embed_message(
-    guild,
-    message_key,
-    channel_id,
-    embed,
-    view=None
-):
-
-    saved = get_bot_message(
-        guild.id,
-        message_key
-    )
-
-    channel = bot.get_channel(channel_id)
-
-    if channel is None:
-
-        try:
-            channel = await bot.fetch_channel(channel_id)
-
-        except discord.HTTPException:
-
-            logger.exception(
-                "Could not fetch channel %s",
-                channel_id
-            )
-
-            return False
-
-    if not isinstance(channel, discord.TextChannel):
-        logger.error("Invalid text channel: %s", channel_id)
-        return False
-
-    if channel.guild.id != guild.id:
-        return False
-
-    if saved:
-
-        try:
-
-            old_channel = await bot.fetch_channel(
-                int(saved["channel_id"])
-            )
-
-            old_message = await old_channel.fetch_message(
-                int(saved["message_id"])
-            )
-
-            if old_channel.id != channel.id:
-
-                await old_message.delete()
-
-            else:
-
-                await old_message.edit(
-                    embed=embed,
-                    view=view
-                )
-
-                logger.info(
-                    "Updated persistent message: %s",
-                    message_key
-                )
-
-                return True
-
-        except discord.NotFound:
-            pass
-
-        except discord.Forbidden:
-
-            logger.error(
-                "Missing permission for persistent message: %s",
-                message_key
-            )
-
-            return False
-
-        except discord.HTTPException:
-
-            logger.exception(
-                "Could not update persistent message: %s",
-                message_key
-            )
-
-            return False
-
-    try:
-
-        message = await channel.send(
-            embed=embed,
-            view=view
-        )
-
-        save_bot_message(
-            guild.id,
-            message_key,
-            channel.id,
-            message.id
-        )
-
-        logger.info(
-            "Created persistent message: %s",
-            message_key
-        )
-
-        return True
-
-    except discord.Forbidden:
-
-        logger.error(
-            "Missing permission to send persistent message: %s",
-            message_key
-        )
-
-        return False
-
-    except discord.HTTPException:
-
-        logger.exception(
-            "Could not create persistent message: %s",
-            message_key
-        )
-
-        return False
-
-
-# ========================================================
-# ARCADE GUIDES
-# ========================================================
-
-def create_arabic_guide():
-
-    embed = discord.Embed(
-        title="📘 دليل MHN ARCADE",
-        description=(
-            "أهلًا بك في MHN ARCADE! 💜\n\n"
-            "**🎮 كيف تبدأ؟**\n"
-            "1. اختر لغتك باستخدام `/language`.\n"
-            "2. استخدم القنوات المخصصة للألعاب.\n"
-            "3. تابع بطاقتك وإحصائياتك في قناة بطاقات اللاعبين.\n"
-            "4. نافس اللاعبين وتابع ترتيبك في لوحة المتصدرين.\n\n"
-            "**🏆 نظام التقدم**\n"
-            "• تبدأ من المستوى 0.\n"
-            "• XP والتقدم مرتبطان بالألعاب.\n"
-            "• الإنجازات تُسجل عند فتحها.\n\n"
-            "**💜 ملاحظة**\n"
-            "المزيد من الألعاب والأنظمة ستصل مع التحديثات القادمة.\n\n"
-            "استخدم `/ping` للتأكد من اتصال البوت."
-        ),
-        color=PURPLE
-    )
-
-    embed.set_footer(
-        text="MHN ARCADE V1 • PLAY • COMPETE • WIN"
-    )
-
-    return embed
-
-
-def create_english_guide():
-
-    embed = discord.Embed(
-        title="📘 MHN ARCADE Guide",
-        description=(
-            "Welcome to MHN ARCADE! 💜\n\n"
-            "**🎮 How to get started**\n"
-            "1. Choose your language using `/language`.\n"
-            "2. Use the designated arcade channels.\n"
-            "3. Check your player card and statistics.\n"
-            "4. Compete and follow your position on the leaderboard.\n\n"
-            "**🏆 Progression**\n"
-            "• Every player starts at Level 0.\n"
-            "• XP and progression are tied to games.\n"
-            "• Achievements are recorded when unlocked.\n\n"
-            "**💜 Note**\n"
-            "More games and features will arrive in future updates.\n\n"
-            "Use `/ping` to check the bot connection."
-        ),
-        color=PURPLE
-    )
-
-    embed.set_footer(
-        text="MHN ARCADE V1 • PLAY • COMPETE • WIN"
-    )
-
-    return embed
-
-
-# ========================================================
-# PLAYER RANK DISPLAY
-# ========================================================
 
 def get_rank_name(level):
 
@@ -555,6 +189,250 @@ def get_rank_name(level):
     return "ROOKIE"
 
 
+async def fetch_text_channel(channel_id):
+
+    channel = bot.get_channel(channel_id)
+
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(channel_id)
+        except discord.HTTPException:
+            logger.exception("Could not fetch channel %s", channel_id)
+            return None
+
+    if not isinstance(channel, discord.TextChannel):
+        return None
+
+    return channel
+
+
+# ========================================================
+# WELCOME EMBEDS
+# ========================================================
+
+def create_arabic_welcome():
+
+    embed = discord.Embed(
+        title="🎮 حياك في MHN ARCADE!",
+        description=(
+            "مرحبًا بك في عالم MHN ARCADE! 💜\n\n"
+            "هنا تبدأ رحلتك في الألعاب والتحديات.\n"
+            "اختبر مهاراتك، نافس أصحابك، واجمع XP والعملات "
+            "وارفع مستواك حتى تصل إلى القمة!\n\n"
+            "🏆 **نظام مستويات وتقدم**\n"
+            "🪙 **محفظة وبنك ومكافآت**\n"
+            "🎭 **شخصيات أنمي ونتفلكس**\n"
+            "🎮 **مجموعة ألعاب متنوعة**\n"
+            "📊 **بطاقات لاعبين ولوحات متصدرين**\n\n"
+            "**PLAY • COMPETE • WIN**\n"
+            "**YOUR GAME YOUR CHALLENGE.**\n\n"
+            "💜 **MHN ARCADE V2.0 — THE NEXT LEVEL.**"
+        ),
+        color=PURPLE
+    )
+
+    embed.set_footer(
+        text="MHN ARCADE V2.0 • PLAY • COMPETE • WIN"
+    )
+
+    return embed
+
+
+def create_english_welcome():
+
+    embed = discord.Embed(
+        title="🎮 Welcome to MHN ARCADE!",
+        description=(
+            "Welcome to the world of MHN ARCADE! 💜\n\n"
+            "Your journey through games and challenges starts here.\n"
+            "Test your skills, compete with friends, earn XP and coins, "
+            "and climb your way to the top!\n\n"
+            "🏆 **Level and progression system**\n"
+            "🪙 **Wallet, bank and rewards**\n"
+            "🎭 **Anime and Netflix characters**\n"
+            "🎮 **A variety of games**\n"
+            "📊 **Player cards and leaderboards**\n\n"
+            "**PLAY • COMPETE • WIN**\n"
+            "**YOUR GAME YOUR CHALLENGE.**\n\n"
+            "💜 **MHN ARCADE V2.0 — THE NEXT LEVEL.**"
+        ),
+        color=PURPLE
+    )
+
+    embed.set_footer(
+        text="MHN ARCADE V2.0 • PLAY • COMPETE • WIN"
+    )
+
+    return embed
+
+
+# ========================================================
+# SAVED MESSAGE MANAGER
+# ========================================================
+
+async def ensure_saved_embed_message(
+    guild,
+    message_key,
+    channel_id,
+    embed,
+    view=None
+):
+
+    channel = await fetch_text_channel(channel_id)
+
+    if channel is None:
+        logger.error("Invalid destination channel: %s", channel_id)
+        return False
+
+    if channel.guild.id != guild.id:
+        return False
+
+    saved = get_bot_message(guild.id, message_key)
+
+    if saved:
+
+        try:
+
+            old_channel = await bot.fetch_channel(
+                int(saved["channel_id"])
+            )
+
+            old_message = await old_channel.fetch_message(
+                int(saved["message_id"])
+            )
+
+            if old_channel.id == channel.id:
+
+                await old_message.edit(
+                    embed=embed,
+                    view=view
+                )
+
+                logger.info("Updated saved message: %s", message_key)
+                return True
+
+            await old_message.delete()
+
+        except discord.NotFound:
+            logger.warning("Saved message missing: %s", message_key)
+
+        except discord.Forbidden:
+            logger.error("No permission to update: %s", message_key)
+            return False
+
+        except discord.HTTPException:
+            logger.exception("Could not update: %s", message_key)
+            return False
+
+    try:
+
+        message = await channel.send(
+            embed=embed,
+            view=view
+        )
+
+        save_bot_message(
+            guild.id,
+            message_key,
+            channel.id,
+            message.id
+        )
+
+        logger.info("Created saved message: %s", message_key)
+        return True
+
+    except discord.HTTPException:
+        logger.exception("Could not create message: %s", message_key)
+        return False
+
+
+async def initialize_welcome_messages_for_guild(guild):
+
+    arabic = await ensure_saved_embed_message(
+        guild,
+        "welcome_ar",
+        ARABIC_ARCADE_CHANNEL_ID,
+        create_arabic_welcome()
+    )
+
+    english = await ensure_saved_embed_message(
+        guild,
+        "welcome_en",
+        ENGLISH_ARCADE_CHANNEL_ID,
+        create_english_welcome()
+    )
+
+    return arabic and english
+
+
+async def initialize_welcome_messages():
+
+    success = True
+
+    for guild in bot.guilds:
+
+        result = await initialize_welcome_messages_for_guild(guild)
+
+        if not result:
+            success = False
+
+    return success
+
+
+# ========================================================
+# ARCADE GUIDES
+# ========================================================
+
+def create_arabic_guide():
+
+    return build_embed(
+        "📘 دليل MHN ARCADE V2.0",
+        (
+            "أهلًا بك في MHN ARCADE! 💜\n\n"
+            "**🎮 البداية**\n"
+            "• استخدم `/language` لاختيار لغتك.\n"
+            "• استخدم `/arcade` لفتح قائمة الألعاب.\n"
+            "• استخدم `/character` لاختيار شخصيتك.\n\n"
+            "**🏆 التقدم**\n"
+            "• اجمع XP وارفع مستواك.\n"
+            "• اربح العملات من الألعاب.\n"
+            "• تابع إحصائياتك باستخدام `/arcade_stats`.\n\n"
+            "**🪙 الاقتصاد**\n"
+            "• `/wallet` لعرض رصيدك.\n"
+            "• `/deposit` لإيداع العملات في البنك.\n"
+            "• `/withdraw` لسحب العملات من البنك.\n\n"
+            "**📊 بطاقة اللاعب**\n"
+            "استخدم زر بطاقة اللاعب في القناة المخصصة.\n\n"
+            "**💜 استمتع باللعب والتحدي!**"
+        )
+    )
+
+
+def create_english_guide():
+
+    return build_embed(
+        "📘 MHN ARCADE V2.0 Guide",
+        (
+            "Welcome to MHN ARCADE! 💜\n\n"
+            "**🎮 Getting Started**\n"
+            "• Use `/language` to choose your language.\n"
+            "• Use `/arcade` to open the games menu.\n"
+            "• Use `/character` to select your character.\n\n"
+            "**🏆 Progression**\n"
+            "• Earn XP and level up.\n"
+            "• Win coins through games.\n"
+            "• Check your stats using `/arcade_stats`.\n\n"
+            "**🪙 Economy**\n"
+            "• `/wallet` to view your balance.\n"
+            "• `/deposit` to deposit coins.\n"
+            "• `/withdraw` to withdraw coins.\n\n"
+            "**📊 Player Card**\n"
+            "Use the player card button in the designated channel.\n\n"
+            "**💜 Play • Compete • Win!**"
+        )
+    )
+
+
 # ========================================================
 # PLAYER CARD EMBED
 # ========================================================
@@ -576,6 +454,18 @@ def create_player_card_embed(guild, user, language):
         language
     )
 
+    wallet = get_wallet(guild.id, user.id)
+
+    selected = get_selected_character(
+        guild.id,
+        user.id
+    )
+
+    character = None
+
+    if selected:
+        character = get_character(selected["character_id"])
+
     games = data["games_played"]
     wins = data["wins"]
 
@@ -585,26 +475,52 @@ def create_player_card_embed(guild, user, language):
         else 0
     )
 
+    next_level_xp = xp_required_for_next_level(data["level"])
+
+    progress_bar_length = 10
+
+    filled = min(
+        progress_bar_length,
+        int(
+            (data["xp"] / max(1, next_level_xp))
+            * progress_bar_length
+        )
+    )
+
+    progress_bar = (
+        "🟪" * filled
+        + "⬛" * (progress_bar_length - filled)
+    )
+
+    character_name = (
+        character["name_ar"]
+        if character and language == "ar"
+        else character["name"]
+        if character
+        else ("لم يتم اختيار شخصية" if language == "ar" else "No character selected")
+    )
+
     if language == "ar":
 
         embed = discord.Embed(
             title="💜 بطاقة اللاعب",
             description=(
                 f"**{data['username']}**\n"
-                f"رتبة اللاعب: **{get_rank_name(data['level'])}**"
+                f"الرتبة: **{get_rank_name(data['level'])}**\n"
+                f"الشخصية: **{character_name}**"
             ),
             color=PURPLE
         )
 
         embed.add_field(
             name="⭐ المستوى",
-            value=f"Level {data['level']}",
+            value=str(data["level"]),
             inline=True
         )
 
         embed.add_field(
             name="✨ XP",
-            value=f"{data['xp']:,}",
+            value=f"{data['xp']:,} / {next_level_xp:,}",
             inline=True
         )
 
@@ -612,6 +528,12 @@ def create_player_card_embed(guild, user, language):
             name="🏆 Prestige",
             value=str(data["prestige"]),
             inline=True
+        )
+
+        embed.add_field(
+            name="📈 التقدم",
+            value=progress_bar,
+            inline=False
         )
 
         embed.add_field(
@@ -645,13 +567,21 @@ def create_player_card_embed(guild, user, language):
         )
 
         embed.add_field(
-            name="📈 إجمالي XP",
-            value=f"{data['lifetime_xp']:,}",
+            name="🪙 المحفظة",
+            value=f"{wallet['coins']:,}",
             inline=True
         )
 
-        embed.set_footer(
-            text="MHN ARCADE V1 • PLAYER PROFILE"
+        embed.add_field(
+            name="🏦 البنك",
+            value=f"{wallet['bank']:,}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="📚 إجمالي XP",
+            value=f"{data['lifetime_xp']:,}",
+            inline=True
         )
 
     else:
@@ -660,7 +590,8 @@ def create_player_card_embed(guild, user, language):
             title="💜 Player Card",
             description=(
                 f"**{data['username']}**\n"
-                f"Player Rank: **{get_rank_name(data['level'])}**"
+                f"Rank: **{get_rank_name(data['level'])}**\n"
+                f"Character: **{character_name}**"
             ),
             color=PURPLE
         )
@@ -673,7 +604,7 @@ def create_player_card_embed(guild, user, language):
 
         embed.add_field(
             name="✨ XP",
-            value=f"{data['xp']:,}",
+            value=f"{data['xp']:,} / {next_level_xp:,}",
             inline=True
         )
 
@@ -681,6 +612,12 @@ def create_player_card_embed(guild, user, language):
             name="🏆 Prestige",
             value=str(data["prestige"]),
             inline=True
+        )
+
+        embed.add_field(
+            name="📈 Progress",
+            value=progress_bar,
+            inline=False
         )
 
         embed.add_field(
@@ -714,26 +651,40 @@ def create_player_card_embed(guild, user, language):
         )
 
         embed.add_field(
-            name="📈 Lifetime XP",
+            name="🪙 Wallet",
+            value=f"{wallet['coins']:,}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="🏦 Bank",
+            value=f"{wallet['bank']:,}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="📚 Lifetime XP",
             value=f"{data['lifetime_xp']:,}",
             inline=True
         )
 
-        embed.set_footer(
-            text="MHN ARCADE V1 • PLAYER PROFILE"
-        )
+    if character and character.get("image_url"):
+        embed.set_thumbnail(url=character["image_url"])
+
+    embed.set_footer(
+        text="MHN ARCADE V2.0 • PLAYER PROFILE"
+    )
 
     return embed
 
 
 # ========================================================
-# PLAYER CARD PANEL BUTTON
+# PLAYER CARD PANEL
 # ========================================================
 
 class PlayerCardPanelView(discord.ui.View):
 
     def __init__(self):
-
         super().__init__(timeout=None)
 
     @discord.ui.button(
@@ -749,46 +700,39 @@ class PlayerCardPanelView(discord.ui.View):
     ):
 
         if interaction.guild is None:
-
             await interaction.response.send_message(
                 "Use this button inside the server.",
                 ephemeral=True
             )
-
             return
 
-        player = get_player(
-            interaction.guild.id,
-            interaction.user.id
-        )
+        guild_id = interaction.guild.id
+        user_id = interaction.user.id
+
+        player = get_player(guild_id, user_id)
 
         if player is None:
 
             create_player(
-                interaction.guild.id,
-                interaction.user.id,
+                guild_id,
+                user_id,
                 interaction.user.name
             )
 
-            player = get_player(
-                interaction.guild.id,
-                interaction.user.id
-            )
+            player = get_player(guild_id, user_id)
 
         language = player["active_language"]
 
         if language not in ("ar", "en"):
-
             await interaction.response.send_message(
                 "💜 اختر لغتك أولًا باستخدام `/language`.",
                 ephemeral=True
             )
-
             return
 
         ensure_progress(
-            interaction.guild.id,
-            interaction.user.id,
+            guild_id,
+            user_id,
             language
         )
 
@@ -799,48 +743,27 @@ class PlayerCardPanelView(discord.ui.View):
         )
 
         if embed is None:
-
             await interaction.response.send_message(
-                "Could not load your player card. Try again.",
+                "Could not load your player card.",
                 ephemeral=True
             )
-
             return
 
-        channel = bot.get_channel(
+        channel = await fetch_text_channel(
             PLAYER_CARDS_CHANNEL_ID
         )
 
         if channel is None:
-
-            try:
-
-                channel = await bot.fetch_channel(
-                    PLAYER_CARDS_CHANNEL_ID
-                )
-
-            except discord.HTTPException:
-
-                await interaction.response.send_message(
-                    "Player Cards channel is unavailable.",
-                    ephemeral=True
-                )
-
-                return
-
-        if not isinstance(channel, discord.TextChannel):
-
             await interaction.response.send_message(
-                "Player Cards channel is not configured correctly.",
+                "Player Cards channel is unavailable.",
                 ephemeral=True
             )
-
             return
 
-        message_key = f"player_card:{interaction.user.id}"
+        message_key = f"player_card:{user_id}"
 
         saved = get_bot_message(
-            interaction.guild.id,
+            guild_id,
             message_key
         )
 
@@ -856,79 +779,263 @@ class PlayerCardPanelView(discord.ui.View):
                     int(saved["message_id"])
                 )
 
-                if old_channel.id != channel.id:
+                if old_channel.id == channel.id:
 
-                    await old_message.delete()
-
-                else:
-
-                    await old_message.edit(
-                        embed=embed
-                    )
+                    await old_message.edit(embed=embed)
 
                     await interaction.response.send_message(
                         "💜 تم تحديث بطاقة لاعبك!",
                         ephemeral=True
                     )
-
                     return
+
+                await old_message.delete()
 
             except discord.NotFound:
                 pass
 
             except discord.Forbidden:
-
                 await interaction.response.send_message(
                     "I cannot access your previous player card.",
                     ephemeral=True
                 )
-
                 return
 
             except discord.HTTPException:
-
                 await interaction.response.send_message(
-                    "Could not update your player card. Try again.",
+                    "Could not update your player card.",
                     ephemeral=True
                 )
-
                 return
 
         try:
 
-            message = await channel.send(
-                embed=embed
-            )
+            message = await channel.send(embed=embed)
 
             save_bot_message(
-                interaction.guild.id,
+                guild_id,
                 message_key,
                 channel.id,
                 message.id
             )
 
             await interaction.response.send_message(
-                "💜 تم إنشاء بطاقة لاعبك في قناة بطاقات اللاعبين!",
+                "💜 تم إنشاء بطاقة لاعبك!",
                 ephemeral=True
             )
 
         except discord.HTTPException:
-
             await interaction.response.send_message(
-                "Could not create your player card. Check bot permissions.",
+                "Could not create your player card.",
                 ephemeral=True
             )
 
 
 # ========================================================
-# LEADERBOARD EMBEDS
+# CHARACTER SELECT MENU
 # ========================================================
 
-def create_leaderboard_embed(
-    guild,
-    language,
-    seasonal=False
-):
+class CharacterSelect(discord.ui.Select):
+
+    def __init__(self, player_id, guild_id, category, language):
+
+        self.player_id = player_id
+        self.guild_id = guild_id
+        self.category = category
+        self.language = language
+
+        characters = get_characters_by_category(category)
+
+        options = []
+
+        for character in characters:
+
+            label = (
+                character["name_ar"]
+                if language == "ar"
+                else character["name"]
+            )
+
+            options.append(
+                discord.SelectOption(
+                    label=label[:100],
+                    value=character["id"],
+                    description=character["series"][:100]
+                )
+            )
+
+        placeholder = (
+            "اختر شخصية"
+            if language == "ar"
+            else "Choose your character"
+        )
+
+        super().__init__(
+            placeholder=placeholder,
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+
+        if interaction.user.id != self.player_id:
+            await interaction.response.send_message(
+                "هذه القائمة ليست لك.",
+                ephemeral=True
+            )
+            return
+
+        character_id = self.values[0]
+        character = get_character(character_id)
+
+        if character is None:
+            await interaction.response.send_message(
+                "Character not found.",
+                ephemeral=True
+            )
+            return
+
+        select_character(
+            self.guild_id,
+            self.player_id,
+            character_id
+        )
+
+        if self.language == "ar":
+
+            embed = build_embed(
+                "🎭 تم اختيار الشخصية!",
+                (
+                    f"اخترت شخصية **{character['name_ar']}** بنجاح!\n"
+                    f"العمل: **{character['series']}**\n\n"
+                    "ستظهر شخصيتك في بطاقة اللاعب."
+                )
+            )
+
+        else:
+
+            embed = build_embed(
+                "🎭 Character Selected!",
+                (
+                    f"You selected **{character['name']}**!\n"
+                    f"Series: **{character['series']}**\n\n"
+                    "Your character will appear on your player card."
+                )
+            )
+
+        if character.get("image_url"):
+            embed.set_thumbnail(url=character["image_url"])
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=None
+        )
+
+
+class CharacterSelectView(discord.ui.View):
+
+    def __init__(self, player_id, guild_id, category, language):
+
+        super().__init__(timeout=120)
+
+        self.add_item(
+            CharacterSelect(
+                player_id,
+                guild_id,
+                category,
+                language
+            )
+        )
+
+
+class CharacterCategoryButton(discord.ui.Button):
+
+    def __init__(self, player_id, guild_id, category, language):
+
+        self.player_id = player_id
+        self.guild_id = guild_id
+        self.category = category
+        self.language = language
+
+        if category == CATEGORY_ANIME:
+            label = "شخصيات الأنمي" if language == "ar" else "Anime Characters"
+            emoji = "⛩️"
+        else:
+            label = "شخصيات نتفلكس" if language == "ar" else "Netflix Characters"
+            emoji = "🎬"
+
+        super().__init__(
+            label=label,
+            emoji=emoji,
+            style=discord.ButtonStyle.primary
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+
+        if interaction.user.id != self.player_id:
+            await interaction.response.send_message(
+                "هذه القائمة ليست لك.",
+                ephemeral=True
+            )
+            return
+
+        view = CharacterSelectView(
+            self.player_id,
+            self.guild_id,
+            self.category,
+            self.language
+        )
+
+        title = (
+            "اختر شخصيتك"
+            if self.language == "ar"
+            else "Choose Your Character"
+        )
+
+        await interaction.response.edit_message(
+            embed=build_embed(
+                f"🎭 {title}",
+                (
+                    "اختر شخصية من القائمة بالأسفل."
+                    if self.language == "ar"
+                    else "Select a character from the menu below."
+                )
+            ),
+            view=view
+        )
+
+
+class CharacterHomeView(discord.ui.View):
+
+    def __init__(self, player_id, guild_id, language):
+
+        super().__init__(timeout=120)
+
+        self.add_item(
+            CharacterCategoryButton(
+                player_id,
+                guild_id,
+                CATEGORY_ANIME,
+                language
+            )
+        )
+
+        self.add_item(
+            CharacterCategoryButton(
+                player_id,
+                guild_id,
+                CATEGORY_NETFLIX,
+                language
+            )
+        )
+
+
+# ========================================================
+# LEADERBOARD
+# ========================================================
+
+def create_leaderboard_embed(guild, language, seasonal=False):
 
     if seasonal:
 
@@ -942,29 +1049,22 @@ def create_leaderboard_embed(
             title = "🏆 المتصدرون العرب • الموسم"
             empty = "لا يوجد موسم نشط حاليًا."
             no_players = "لا يوجد لاعبون في ترتيب هذا الموسم بعد."
-
         else:
             title = "🏆 English Leaderboard • Season"
             empty = "There is no active season right now."
             no_players = "No players ranked in this season yet."
 
         if season is None:
-
             description = empty
 
         elif not rows:
-
-            description = (
-                f"**{season['name']}**\n\n"
-                f"{no_players}"
-            )
+            description = f"**{season['name']}**\n\n{no_players}"
 
         else:
 
             description = f"**{season['name']}**\n\n"
 
             for index, row in enumerate(rows, start=1):
-
                 description += (
                     f"**{index}.** {row['username']} "
                     f"— {row['xp']:,} XP\n"
@@ -981,13 +1081,11 @@ def create_leaderboard_embed(
         if language == "ar":
             title = "🏆 المتصدرون العرب • إجمالي"
             empty = "لا يوجد لاعبون في الترتيب حتى الآن."
-
         else:
             title = "🏆 English Leaderboard • All Time"
             empty = "No players on the leaderboard yet."
 
         if not rows:
-
             description = empty
 
         else:
@@ -995,24 +1093,13 @@ def create_leaderboard_embed(
             description = ""
 
             for index, row in enumerate(rows, start=1):
-
                 description += (
                     f"**{index}.** {row['username']} "
                     f"— Level {row['level']} "
                     f"• {row['xp']:,} XP\n"
                 )
 
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        color=PURPLE
-    )
-
-    embed.set_footer(
-        text="MHN ARCADE V1 • TOP 10"
-    )
-
-    return embed
+    return build_embed(title, description)
 
 
 async def refresh_leaderboard(guild):
@@ -1024,33 +1111,22 @@ async def refresh_leaderboard(guild):
         create_leaderboard_embed(guild, "en", True),
     ]
 
-    saved = get_bot_message(
-        guild.id,
-        "leaderboard_panel"
-    )
+    return await ensure_saved_embed_message(
+        guild,
+        "leaderboard_panel",
+        LEADERBOARD_CHANNEL_ID,
+        embeds[0]
+    ) if False else await refresh_leaderboard_message(guild, embeds)
 
-    channel = bot.get_channel(
-        LEADERBOARD_CHANNEL_ID
-    )
+
+async def refresh_leaderboard_message(guild, embeds):
+
+    channel = await fetch_text_channel(LEADERBOARD_CHANNEL_ID)
 
     if channel is None:
-
-        try:
-
-            channel = await bot.fetch_channel(
-                LEADERBOARD_CHANNEL_ID
-            )
-
-        except discord.HTTPException:
-
-            logger.exception(
-                "Leaderboard channel unavailable."
-            )
-
-            return False
-
-    if not isinstance(channel, discord.TextChannel):
         return False
+
+    saved = get_bot_message(guild.id, "leaderboard_panel")
 
     if saved:
 
@@ -1064,43 +1140,27 @@ async def refresh_leaderboard(guild):
                 int(saved["message_id"])
             )
 
-            if old_channel.id != channel.id:
+            if old_channel.id == channel.id:
 
-                await old_message.delete()
-
-            else:
-
-                await old_message.edit(
-                    embeds=embeds
-                )
-
-                logger.info("Leaderboard updated.")
+                await old_message.edit(embeds=embeds)
                 return True
+
+            await old_message.delete()
 
         except discord.NotFound:
             pass
 
         except discord.Forbidden:
-
-            logger.error(
-                "Missing permission to update leaderboard."
-            )
-
+            logger.error("Cannot update leaderboard.")
             return False
 
         except discord.HTTPException:
-
-            logger.exception(
-                "Could not update leaderboard."
-            )
-
+            logger.exception("Leaderboard update failed.")
             return False
 
     try:
 
-        message = await channel.send(
-            embeds=embeds
-        )
+        message = await channel.send(embeds=embeds)
 
         save_bot_message(
             guild.id,
@@ -1109,15 +1169,10 @@ async def refresh_leaderboard(guild):
             message.id
         )
 
-        logger.info("Leaderboard created.")
         return True
 
     except discord.HTTPException:
-
-        logger.exception(
-            "Could not create leaderboard."
-        )
-
+        logger.exception("Could not create leaderboard.")
         return False
 
 
@@ -1149,27 +1204,11 @@ async def announce_achievement(
     if not newly_unlocked:
         return False
 
-    channel = bot.get_channel(
+    channel = await fetch_text_channel(
         ACHIEVEMENTS_CHANNEL_ID
     )
 
     if channel is None:
-
-        try:
-
-            channel = await bot.fetch_channel(
-                ACHIEVEMENTS_CHANNEL_ID
-            )
-
-        except discord.HTTPException:
-
-            logger.exception(
-                "Achievements channel unavailable."
-            )
-
-            return False
-
-    if not isinstance(channel, discord.TextChannel):
         return False
 
     if language == "ar":
@@ -1190,27 +1229,14 @@ async def announce_achievement(
             f"{description_en}"
         )
 
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        color=PURPLE
-    )
-
-    embed.set_footer(
-        text="MHN ARCADE V1 • ACHIEVEMENT UNLOCKED"
-    )
+    embed = build_embed(title, description)
 
     try:
-
         await channel.send(embed=embed)
         return True
 
     except discord.HTTPException:
-
-        logger.exception(
-            "Achievement announcement failed."
-        )
-
+        logger.exception("Achievement announcement failed.")
         return False
 
 
@@ -1234,21 +1260,20 @@ async def initialize_arcade_systems(guild):
         create_english_guide()
     )
 
-    panel_embed = discord.Embed(
-        title="🎮 بطاقات اللاعبين | Player Cards",
-        description=(
+    panel = build_embed(
+        "🎮 بطاقات اللاعبين | Player Cards",
+        (
             "اضغط الزر بالأسفل لإنشاء بطاقة لاعبك أو تحديثها.\n"
             "Your player card will be created or updated here.\n\n"
             "💜 بطاقة واحدة لكل لاعب، بدون تكرار."
-        ),
-        color=PURPLE
+        )
     )
 
     await ensure_saved_embed_message(
         guild,
         "player_card_panel",
         PLAYER_CARDS_CHANNEL_ID,
-        panel_embed,
+        panel,
         view=PlayerCardPanelView()
     )
 
@@ -1268,38 +1293,29 @@ async def initialize_arcade_systems(guild):
 async def on_ready():
 
     logger.info("=" * 45)
-    logger.info("💜 MHN ARCADE V1")
+    logger.info("💜 MHN ARCADE V2.0")
     logger.info("Logged in as: %s", bot.user)
     logger.info("Bot ID: %s", bot.user.id)
     logger.info("Servers: %s", len(bot.guilds))
     logger.info("Status: ONLINE")
     logger.info("=" * 45)
 
-    welcome_success = await initialize_welcome_messages()
-
-    if welcome_success:
-        logger.info("Welcome messages verified successfully.")
-    else:
-        logger.warning(
-            "Some welcome messages could not be verified."
-        )
+    await initialize_welcome_messages()
 
     for guild in bot.guilds:
 
         try:
-
             await initialize_arcade_systems(guild)
 
         except Exception:
-
             logger.exception(
-                "Failed to initialize arcade systems for %s",
+                "Failed to initialize systems for %s",
                 guild.name
             )
 
 
 # ========================================================
-# AUTOMATIC PLAYER REGISTRATION
+# PLAYER REGISTRATION
 # ========================================================
 
 @bot.event
@@ -1309,9 +1325,9 @@ async def on_member_join(member: discord.Member):
         return
 
     create_player(
-        guild_id=member.guild.id,
-        user_id=member.id,
-        username=member.name
+        member.guild.id,
+        member.id,
+        member.name
     )
 
     logger.info(
@@ -1327,25 +1343,251 @@ async def on_member_join(member: discord.Member):
 
 @bot.tree.command(
     name="ping",
-    description="Check MHN ARCADE connection"
+    description="Check MHN ARCADE V2.0 connection"
 )
 async def ping(interaction: discord.Interaction):
 
-    latency = round(
-        bot.latency * 1000
-    )
+    latency = round(bot.latency * 1000)
 
-    embed = discord.Embed(
-        title="💜 MHN ARCADE V1",
-        description=(
+    embed = build_embed(
+        "💜 MHN ARCADE V2.0",
+        (
             "The arcade system is online!\n\n"
             f"🏓 **Ping:** {latency} ms"
-        ),
-        color=PURPLE
+        )
     )
 
     await interaction.response.send_message(
         embed=embed,
+        ephemeral=True
+    )
+
+
+# ========================================================
+# WALLET COMMAND
+# ========================================================
+
+@bot.tree.command(
+    name="wallet",
+    description="View your wallet and bank balance"
+)
+@app_commands.guild_only()
+async def wallet_command(interaction: discord.Interaction):
+
+    wallet = get_wallet(
+        interaction.guild.id,
+        interaction.user.id
+    )
+
+    language = get_language(
+        interaction.guild.id,
+        interaction.user.id
+    )
+
+    if language == "ar":
+
+        embed = build_embed(
+            "🪙 محفظتك",
+            (
+                f"👤 اللاعب: {interaction.user.mention}\n\n"
+                f"💰 **المحفظة:** {wallet['coins']:,} عملة\n"
+                f"🏦 **البنك:** {wallet['bank']:,} عملة\n"
+                f"💎 **الإجمالي:** "
+                f"{wallet['coins'] + wallet['bank']:,} عملة"
+            )
+        )
+
+    else:
+
+        embed = build_embed(
+            "🪙 Your Wallet",
+            (
+                f"👤 Player: {interaction.user.mention}\n\n"
+                f"💰 **Wallet:** {wallet['coins']:,} coins\n"
+                f"🏦 **Bank:** {wallet['bank']:,} coins\n"
+                f"💎 **Total:** "
+                f"{wallet['coins'] + wallet['bank']:,} coins"
+            )
+        )
+
+    await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True
+    )
+
+
+# ========================================================
+# DEPOSIT COMMAND
+# ========================================================
+
+@bot.tree.command(
+    name="deposit",
+    description="Deposit coins into your bank"
+)
+@app_commands.guild_only()
+@app_commands.describe(
+    amount="Number of coins to deposit"
+)
+async def deposit_command(
+    interaction: discord.Interaction,
+    amount: app_commands.Range[int, 1, 1000000]
+):
+
+    success = deposit_coins(
+        interaction.guild.id,
+        interaction.user.id,
+        amount
+    )
+
+    language = get_language(
+        interaction.guild.id,
+        interaction.user.id
+    )
+
+    if success:
+
+        message = (
+            f"✅ تم إيداع **{amount:,}** عملة في البنك."
+            if language == "ar"
+            else f"✅ Deposited **{amount:,}** coins into your bank."
+        )
+
+    else:
+
+        message = (
+            "❌ رصيد محفظتك غير كافٍ."
+            if language == "ar"
+            else "❌ You don't have enough coins in your wallet."
+        )
+
+    await interaction.response.send_message(
+        message,
+        ephemeral=True
+    )
+
+
+# ========================================================
+# WITHDRAW COMMAND
+# ========================================================
+
+@bot.tree.command(
+    name="withdraw",
+    description="Withdraw coins from your bank"
+)
+@app_commands.guild_only()
+@app_commands.describe(
+    amount="Number of coins to withdraw"
+)
+async def withdraw_command(
+    interaction: discord.Interaction,
+    amount: app_commands.Range[int, 1, 1000000]
+):
+
+    success = withdraw_coins(
+        interaction.guild.id,
+        interaction.user.id,
+        amount
+    )
+
+    language = get_language(
+        interaction.guild.id,
+        interaction.user.id
+    )
+
+    if success:
+
+        message = (
+            f"✅ تم سحب **{amount:,}** عملة من البنك."
+            if language == "ar"
+            else f"✅ Withdrew **{amount:,}** coins from your bank."
+        )
+
+    else:
+
+        message = (
+            "❌ رصيد البنك غير كافٍ."
+            if language == "ar"
+            else "❌ You don't have enough coins in your bank."
+        )
+
+    await interaction.response.send_message(
+        message,
+        ephemeral=True
+    )
+
+
+# ========================================================
+# CHARACTER COMMAND
+# ========================================================
+
+@bot.tree.command(
+    name="character",
+    description="Choose your anime or Netflix character"
+)
+@app_commands.guild_only()
+async def character_command(interaction: discord.Interaction):
+
+    player = get_player(
+        interaction.guild.id,
+        interaction.user.id
+    )
+
+    if player is None:
+
+        create_player(
+            interaction.guild.id,
+            interaction.user.id,
+            interaction.user.name
+        )
+
+        player = get_player(
+            interaction.guild.id,
+            interaction.user.id
+        )
+
+    language = player["active_language"]
+
+    if language not in ("ar", "en"):
+
+        await interaction.response.send_message(
+            "💜 اختر لغتك أولًا باستخدام `/language`.",
+            ephemeral=True
+        )
+        return
+
+    view = CharacterHomeView(
+        interaction.user.id,
+        interaction.guild.id,
+        language
+    )
+
+    if language == "ar":
+
+        embed = build_embed(
+            "🎭 اختر شخصيتك",
+            (
+                "مرحبًا بك في نظام الشخصيات!\n\n"
+                "⛩️ **شخصيات الأنمي** — 15 شخصية\n"
+                "🎬 **شخصيات نتفلكس** — 12 شخصية\n\n"
+                "اختر القسم الذي تريده."
+            )
+        )
+
+    else:
+
+        embed = build_embed(
+            "🎭 Choose Your Character",
+            (
+                "Welcome to the character system!\n\n"
+                "⛩️ **Anime Characters** — 15 characters\n"
+                "🎬 **Netflix Characters** — 12 characters\n\n"
+                "Choose your category."
+            )
+        )
+
+    await interaction.response.send_message(
+        embed=embed,
+        view=view,
         ephemeral=True
     )
 
@@ -1358,10 +1600,10 @@ class LanguageConfirmationView(discord.ui.View):
 
     def __init__(
         self,
-        member_id: int,
-        guild_id: int,
-        username: str,
-        language: str
+        member_id,
+        guild_id,
+        username,
+        language
     ):
 
         super().__init__(timeout=120)
@@ -1371,10 +1613,7 @@ class LanguageConfirmationView(discord.ui.View):
         self.username = username
         self.language = language
 
-    async def interaction_check(
-        self,
-        interaction: discord.Interaction
-    ):
+    async def interaction_check(self, interaction):
 
         if interaction.user.id != self.member_id:
 
@@ -1398,7 +1637,7 @@ class LanguageConfirmationView(discord.ui.View):
         button: discord.ui.Button
     ):
 
-        switched, language = select_language(
+        select_language(
             guild_id=self.guild_id,
             user_id=self.member_id,
             username=self.username,
@@ -1408,7 +1647,7 @@ class LanguageConfirmationView(discord.ui.View):
         for item in self.children:
             item.disabled = True
 
-        if language == "ar":
+        if self.language == "ar":
 
             title = "💜 تم تغيير اللغة"
 
@@ -1426,14 +1665,8 @@ class LanguageConfirmationView(discord.ui.View):
                 "🎮 Your new progress starts at Level 0 with 0 XP."
             )
 
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=PURPLE
-        )
-
         await interaction.response.edit_message(
-            embed=embed,
+            embed=build_embed(title, description),
             view=self
         )
 
@@ -1452,10 +1685,7 @@ class LanguageConfirmationView(discord.ui.View):
             item.disabled = True
 
         await interaction.response.edit_message(
-            content=(
-                "💜 Language change cancelled. "
-                "Your progress remains unchanged."
-            ),
+            content="💜 Language change cancelled. Your progress remains unchanged.",
             embed=None,
             view=self
         )
@@ -1489,7 +1719,7 @@ class LanguageConfirmationView(discord.ui.View):
         )
     ]
 )
-async def language(
+async def language_command(
     interaction: discord.Interaction,
     language: app_commands.Choice[str]
 ):
@@ -1500,7 +1730,6 @@ async def language(
             "This command can only be used inside the server.",
             ephemeral=True
         )
-
         return
 
     selected_language = language.value
@@ -1527,11 +1756,16 @@ async def language(
 
     if current_language == selected_language:
 
-        await interaction.response.send_message(
-            "💜 You are already using this language.",
-            ephemeral=True
+        message = (
+            "💜 أنت تستخدم هذه اللغة بالفعل."
+            if selected_language == "ar"
+            else "💜 You are already using this language."
         )
 
+        await interaction.response.send_message(
+            message,
+            ephemeral=True
+        )
         return
 
     if current_language is None:
@@ -1543,35 +1777,16 @@ async def language(
             language=selected_language
         )
 
-        if selected_language == "ar":
-
-            title = "💜 تم اختيار اللغة"
-
-            description = (
-                "تم اختيار اللغة العربية بنجاح!\n\n"
-                "🎮 رحلتك تبدأ الآن من المستوى 0."
-            )
-
-        else:
-
-            title = "💜 Language Selected"
-
-            description = (
-                "Your arcade language is now **English**!\n\n"
-                "🎮 Your journey starts at Level 0."
-            )
-
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=PURPLE
+        message = (
+            "💜 تم اختيار اللغة العربية بنجاح! رحلتك تبدأ الآن."
+            if selected_language == "ar"
+            else "💜 English selected successfully! Your journey starts now."
         )
 
         await interaction.response.send_message(
-            embed=embed,
+            message,
             ephemeral=True
         )
-
         return
 
     if selected_language == "ar":
@@ -1580,9 +1795,9 @@ async def language(
 
         description = (
             "هل أنت متأكد من تغيير اللغة إلى العربية؟\n\n"
-            "🔴 **تنبيه:** تغيير اللغة سيؤدي إلى تصفير "
-            "تقدمك في مساري العربية والإنجليزية، "
-            "بما في ذلك المستوى وXP والإحصائيات والإنجازات.\n\n"
+            "🔴 **تنبيه:** تغيير اللغة سيؤدي إلى تصفير تقدمك "
+            "في مساري العربية والإنجليزية، بما في ذلك المستوى "
+            "وXP والإحصائيات والإنجازات.\n\n"
             "سيتم أيضًا تصفير إحصائيات المواسم النشطة فقط.\n"
             "أما المواسم المنتهية وألقابك الخاصة فستبقى محفوظة.\n\n"
             "لن يتم التغيير إلا بعد تأكيدك."
@@ -1594,11 +1809,11 @@ async def language(
 
         description = (
             "Are you sure you want to switch to English?\n\n"
-            "🔴 **Warning:** Switching languages will reset "
-            "your progress in both Arabic and English tracks, "
-            "including levels, XP, statistics, and achievements.\n\n"
-            "Your active season statistics will also reset.\n"
-            "Ended season archives and special titles will remain preserved.\n\n"
+            "🔴 **Warning:** Switching languages will reset your "
+            "progress in both language tracks, including levels, "
+            "XP, statistics, and achievements.\n\n"
+            "Active season statistics will also reset.\n"
+            "Ended seasons and special titles remain preserved.\n\n"
             "Nothing will change until you confirm."
         )
 
@@ -1623,17 +1838,47 @@ async def language(
 
 
 # ========================================================
-# GLOBAL PREFIX COMMAND ERROR HANDLER
+# GLOBAL COMMAND ERROR HANDLER
 # ========================================================
 
-@bot.event
-async def on_command_error(ctx, error):
+@bot.tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction,
+    error: app_commands.AppCommandError
+):
 
-    logger.error(
-        "Command error: %s",
-        error,
+    logger.exception(
+        "Application command error",
         exc_info=error
     )
+
+    message = (
+        "حدث خطأ أثناء تنفيذ الأمر. حاول مرة أخرى."
+        if get_language(
+            interaction.guild.id,
+            interaction.user.id
+        ) == "ar" and interaction.guild
+        else "An error occurred while executing this command. Please try again."
+    )
+
+    try:
+
+        if interaction.response.is_done():
+
+            await interaction.followup.send(
+                message,
+                ephemeral=True
+            )
+
+        else:
+
+            await interaction.response.send_message(
+                message,
+                ephemeral=True
+            )
+
+    except discord.HTTPException:
+        pass
 
 
 # ========================================================
@@ -1642,6 +1887,6 @@ async def on_command_error(ctx, error):
 
 if __name__ == "__main__":
 
-    logger.info("Starting MHN ARCADE V1...")
+    logger.info("Starting MHN ARCADE V2.0...")
 
     bot.run(TOKEN)
