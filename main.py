@@ -1,4 +1,3 @@
-
 """
 ========================================================
 MHN ARCADE V2.0
@@ -80,6 +79,7 @@ ENGLISH_ARCADE_CHANNEL_ID = 1567700330433609910
 PLAYER_CARDS_CHANNEL_ID = 1567719418862112809
 LEADERBOARD_CHANNEL_ID = 1567720123106857142
 ACHIEVEMENTS_CHANNEL_ID = 1567722630969303090
+ARCADE_NEWS_CHANNEL_ID = 1568381560279933049
 
 PURPLE = 0x7C3AED
 VERSION = "V2.0"
@@ -167,6 +167,9 @@ def get_language(guild_id, user_id):
 
 
 def get_rank_name(level):
+
+    if level >= 500:
+        return "MYTHIC"
 
     if level >= 300:
         return "GRANDMASTER"
@@ -1111,12 +1114,7 @@ async def refresh_leaderboard(guild):
         create_leaderboard_embed(guild, "en", True),
     ]
 
-    return await ensure_saved_embed_message(
-        guild,
-        "leaderboard_panel",
-        LEADERBOARD_CHANNEL_ID,
-        embeds[0]
-    ) if False else await refresh_leaderboard_message(guild, embeds)
+    return await refresh_leaderboard_message(guild, embeds)
 
 
 async def refresh_leaderboard_message(guild, embeds):
@@ -1240,6 +1238,64 @@ async def announce_achievement(
         return False
 
 
+async def refresh_player_card_for_member(guild, member, language):
+    """Update an existing public player card after a game result."""
+    if language not in ("ar", "en"):
+        return False
+
+    saved = get_bot_message(guild.id, f"player_card:{member.id}")
+    if not saved:
+        return False
+
+    embed = create_player_card_embed(guild, member, language)
+    if embed is None:
+        return False
+
+    try:
+        channel = await bot.fetch_channel(int(saved["channel_id"]))
+        message = await channel.fetch_message(int(saved["message_id"]))
+        await message.edit(embed=embed)
+        return True
+    except discord.NotFound:
+        logger.warning("Player card message missing for user %s", member.id)
+        return False
+    except (discord.Forbidden, discord.HTTPException):
+        logger.exception("Could not refresh player card for user %s", member.id)
+        return False
+
+
+@bot.event
+async def on_arcade_game_finished(
+    guild_id,
+    user_id,
+    language,
+    result,
+    game_id
+):
+    """Refresh public progression panels after a game is recorded."""
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return
+
+    try:
+        await refresh_leaderboard(guild)
+    except Exception:
+        logger.exception("Could not refresh leaderboard after game %s", game_id)
+
+    member = guild.get_member(user_id)
+    if member is None:
+        try:
+            member = await guild.fetch_member(user_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            logger.warning("Could not find player %s after game %s", user_id, game_id)
+            return
+
+    try:
+        await refresh_player_card_for_member(guild, member, language)
+    except Exception:
+        logger.exception("Could not refresh player card after game %s", game_id)
+
+
 # ========================================================
 # INITIALIZE ARCADE SYSTEMS
 # ========================================================
@@ -1334,6 +1390,99 @@ async def on_member_join(member: discord.Member):
         "New player registered: %s (%s)",
         member.name,
         member.id
+    )
+
+
+# ========================================================
+# UPDATE ANNOUNCEMENT COMMAND
+# ========================================================
+
+@bot.tree.command(
+    name="announce_update",
+    description="Publish an MHN ARCADE update announcement"
+)
+@app_commands.guild_only()
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(
+    version="Update version, for example V2.1",
+    additions="New features added in this update",
+    improvements="Existing features that were improved",
+    fixes="Bugs and issues fixed in this update"
+)
+async def announce_update_command(
+    interaction: discord.Interaction,
+    version: str,
+    additions: str = "",
+    improvements: str = "",
+    fixes: str = ""
+):
+    await interaction.response.defer(ephemeral=True)
+
+    if not version.strip() or len(version) > 30:
+        await interaction.followup.send(
+            "اكتب رقم إصدار صحيحًا (بحد أقصى 30 حرفًا).",
+            ephemeral=True
+        )
+        return
+
+    if any(len(value) > 1000 for value in (additions, improvements, fixes)):
+        await interaction.followup.send(
+            "كل قسم من تفاصيل التحديث يجب ألا يتجاوز 1000 حرف.",
+            ephemeral=True
+        )
+        return
+
+    channel = await fetch_text_channel(ARCADE_NEWS_CHANNEL_ID)
+    if channel is None or channel.guild.id != interaction.guild.id:
+        await interaction.followup.send(
+            "تعذر العثور على قناة أخبار MHN ARCADE أو أنها ليست في هذا السيرفر.",
+            ephemeral=True
+        )
+        return
+
+    embed = discord.Embed(
+        title=f"🚀 MHN ARCADE {version} — UPDATE",
+        description="💜 صدر تحديث جديد! إليكم أبرز التغييرات والإضافات.",
+        color=PURPLE
+    )
+
+    sections = (
+        ("✨ الإضافات الجديدة | New Additions", additions),
+        ("⚙️ التحسينات | Improvements", improvements),
+        ("🛠️ الإصلاحات | Bug Fixes", fixes),
+    )
+
+    for title, content in sections:
+        if content.strip():
+            embed.add_field(name=title, value=content.strip(), inline=False)
+
+    if not embed.fields:
+        embed.description = (
+            "💜 صدر تحديث جديد لـ MHN ARCADE.\n"
+            "A new MHN ARCADE update is now available."
+        )
+
+    embed.set_footer(text=f"MHN ARCADE {version} • PLAY • COMPETE • WIN")
+
+    try:
+        await channel.send(embed=embed)
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "البوت لا يملك صلاحية إرسال الرسائل في قناة الأخبار.",
+            ephemeral=True
+        )
+        return
+    except discord.HTTPException:
+        logger.exception("Could not publish update announcement.")
+        await interaction.followup.send(
+            "تعذر نشر إعلان التحديث بسبب خطأ من Discord.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.followup.send(
+        f"✅ تم نشر إعلان MHN ARCADE {version} في قناة الأخبار.",
+        ephemeral=True
     )
 
 
@@ -1852,14 +2001,24 @@ async def on_app_command_error(
         exc_info=error
     )
 
-    message = (
-        "حدث خطأ أثناء تنفيذ الأمر. حاول مرة أخرى."
-        if get_language(
-            interaction.guild.id,
-            interaction.user.id
-        ) == "ar" and interaction.guild
-        else "An error occurred while executing this command. Please try again."
+    language = (
+        get_language(interaction.guild.id, interaction.user.id)
+        if interaction.guild is not None
+        else None
     )
+
+    if isinstance(error, app_commands.MissingPermissions):
+        message = (
+            "❌ تحتاج صلاحية **Manage Server** لاستخدام هذا الأمر."
+            if language == "ar"
+            else "❌ You need the **Manage Server** permission to use this command."
+        )
+    else:
+        message = (
+            "حدث خطأ أثناء تنفيذ الأمر. حاول مرة أخرى."
+            if language == "ar"
+            else "An error occurred while executing this command. Please try again."
+        )
 
     try:
 
