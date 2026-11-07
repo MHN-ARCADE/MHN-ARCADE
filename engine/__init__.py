@@ -1,3 +1,4 @@
+
 """
 MHN ARCADE V3 - Game Engine
 
@@ -15,13 +16,29 @@ from .core import (
 
 from .lobby import LobbyManager
 
+from .registry import (
+    GameDefinition,
+    GameMode,
+    GameRegistry,
+    RegistryError,
+)
+
 
 __all__ = [
+    # Core
     "GameSession",
     "PlayerStatus",
     "SessionError",
     "SessionManager",
     "SessionPlayer",
     "SessionStatus",
+
+    # Lobby
     "LobbyManager",
+
+    # Registry
+    "GameDefinition",
+    "GameMode",
+    "GameRegistry",
+    "RegistryError",
 ]
