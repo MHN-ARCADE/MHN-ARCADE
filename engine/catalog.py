@@ -1,20 +1,46 @@
-
 """
 MHN ARCADE V3 - Default Game Catalog
 
 Registers the initial game definitions supported by V3.
 
-This module contains metadata only.
-Actual game mechanics are implemented separately.
+Game metadata is stored here.
+Game mechanics are connected through handler factories.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from .registry import (
     GameDefinition,
     GameMode,
     GameRegistry,
 )
+
+
+# =========================================================
+# GAME HANDLER FACTORIES
+# =========================================================
+
+def create_musical_roulette_handler(
+    *,
+    session: Any,
+    session_manager: Any,
+    definition: GameDefinition | None = None,
+) -> Any:
+    """
+    Create a Musical Roulette handler.
+
+    Imports the handler lazily to avoid unnecessary
+    imports while the catalog is being loaded.
+    """
+
+    from .games.musical_roulette import MusicalRoulette
+
+    return MusicalRoulette(
+        session=session,
+        session_manager=session_manager,
+    )
 
 
 # =========================================================
@@ -60,7 +86,13 @@ DEFAULT_GAMES: tuple[GameDefinition, ...] = (
             "يختار اللاعب المحدد لاعباً آخر لإقصائه، "
             "وآخر لاعب متبقٍ يفوز."
         ),
-        tags=("multiplayer", "elimination", "party", "competitive"),
+        tags=(
+            "multiplayer",
+            "elimination",
+            "party",
+            "competitive",
+        ),
+        handler_factory=create_musical_roulette_handler,
     ),
 )
 
@@ -72,9 +104,6 @@ DEFAULT_GAMES: tuple[GameDefinition, ...] = (
 def build_default_registry() -> GameRegistry:
     """
     Build and return a registry containing the default V3 games.
-
-    Returns:
-        GameRegistry: A ready-to-use game registry.
     """
 
     registry = GameRegistry()
@@ -93,7 +122,7 @@ def get_catalog_summary(
     registry: GameRegistry,
 ) -> dict[str, int]:
     """
-    Return a simple summary of registered game modes.
+    Return a summary of registered game modes.
     """
 
     return {
