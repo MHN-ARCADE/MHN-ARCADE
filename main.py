@@ -125,7 +125,8 @@ class MHNArcadeBot(commands.Bot):
 
         # Load the arcade games engine.
         await self.load_extension("games")
-
+        # Load the MHN ARCADE V3 engine.
+        await self.load_extension("v3_discord")
         synced = await self.tree.sync()
 
         logger.info(
