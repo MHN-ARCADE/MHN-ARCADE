@@ -1,6 +1,7 @@
+
 """
 ========================================================
-MHN ARCADE V2.0
+MHN ARCADE V2 + V3
 Main Bot Engine 💜
 ========================================================
 
@@ -11,11 +12,13 @@ Features:
 - Player cards
 - Character selection
 - Arcade games extension
+- V2 and V3 game engines
 - XP and level progression
 - Wallet and bank
 - All-time and seasonal leaderboards
 - Achievement announcements
 - Persistent Discord messages
+- Persistent rank guide
 
 Environment:
     DISCORD_TOKEN
@@ -25,6 +28,7 @@ Files:
     database.py
     games.py
     characters.py
+    v3_discord.py
 ========================================================
 """
 
@@ -82,7 +86,7 @@ ACHIEVEMENTS_CHANNEL_ID = 1567722630969303090
 ARCADE_NEWS_CHANNEL_ID = 1568381560279933049
 
 PURPLE = 0x7C3AED
-VERSION = "V2.0"
+VERSION = "V2 + V3"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -112,7 +116,7 @@ class MHNArcadeBot(commands.Bot):
             command_prefix="!",
             intents=intents,
             activity=discord.Game(
-                name="MHN ARCADE V2.0 🎮"
+                name="MHN ARCADE V2 + V3 🎮"
             )
         )
 
@@ -123,10 +127,12 @@ class MHNArcadeBot(commands.Bot):
         # Persistent player card button.
         self.add_view(PlayerCardPanelView())
 
-        # Load the arcade games engine.
+        # Load the V2 arcade games engine.
         await self.load_extension("games")
-        # Load the MHN ARCADE V3 engine.
+
+        # Load the V3 enhanced arcade engine.
         await self.load_extension("v3_discord")
+
         synced = await self.tree.sync()
 
         logger.info(
@@ -217,26 +223,29 @@ async def fetch_text_channel(channel_id):
 def create_arabic_welcome():
 
     embed = discord.Embed(
-        title="🎮 حياك في MHN ARCADE!",
+        title="🎮 يا هلا والله في MHN ARCADE!",
         description=(
-            "مرحبًا بك في عالم MHN ARCADE! 💜\n\n"
-            "هنا تبدأ رحلتك في الألعاب والتحديات.\n"
-            "اختبر مهاراتك، نافس أصحابك، واجمع XP والعملات "
-            "وارفع مستواك حتى تصل إلى القمة!\n\n"
-            "🏆 **نظام مستويات وتقدم**\n"
+            "نورت الأركيد يا بطل! 💜\n\n"
+            "هنا اللعب له جو ثاني 🔥\n"
+            "اجمع XP، ارفع مستواك، نافس اللاعبين، "
+            "واجمع العملات والإنجازات، وخلّ اسمك بين الأساطير!\n\n"
+            "🏆 **نظام مستويات ورتب وتقدم**\n"
             "🪙 **محفظة وبنك ومكافآت**\n"
-            "🎭 **شخصيات أنمي ونتفلكس**\n"
-            "🎮 **مجموعة ألعاب متنوعة**\n"
-            "📊 **بطاقات لاعبين ولوحات متصدرين**\n\n"
-            "**PLAY • COMPETE • WIN**\n"
-            "**YOUR GAME YOUR CHALLENGE.**\n\n"
-            "💜 **MHN ARCADE V2.0 — THE NEXT LEVEL.**"
+            "🎭 **شخصيات تختار منها**\n"
+            "🎮 **ألعاب وتحديات ومنافسات**\n"
+            "📊 **بطاقات لاعبين وإحصائيات ولوحات متصدرين**\n\n"
+            "🚀 **MHN ARCADE يدعم V2 وV3!**\n"
+            "V2 هو الأساس، وV3 نسخة محسّنة من الأركيد، "
+            "وراح تستمر إضافة ألعاب وميزات جديدة عليها.\n\n"
+            "**والطموح أكبر بإذن الله:**\n"
+            "V4 → V5 → V6 والمشوار مستمر!\n\n"
+            "💜 **العب، نافس، واثبت نفسك!**"
         ),
         color=PURPLE
     )
 
     embed.set_footer(
-        text="MHN ARCADE V2.0 • PLAY • COMPETE • WIN"
+        text="MHN ARCADE • V2 + V3 • PLAY • COMPETE • WIN"
     )
 
     return embed
@@ -247,24 +256,27 @@ def create_english_welcome():
     embed = discord.Embed(
         title="🎮 Welcome to MHN ARCADE!",
         description=(
-            "Welcome to the world of MHN ARCADE! 💜\n\n"
-            "Your journey through games and challenges starts here.\n"
-            "Test your skills, compete with friends, earn XP and coins, "
-            "and climb your way to the top!\n\n"
-            "🏆 **Level and progression system**\n"
+            "Your arcade journey starts here! 💜\n\n"
+            "Earn XP, level up, compete with players, "
+            "collect coins and achievements, and build your legacy!\n\n"
+            "🏆 **Level and rank progression**\n"
             "🪙 **Wallet, bank and rewards**\n"
-            "🎭 **Anime and Netflix characters**\n"
-            "🎮 **A variety of games**\n"
-            "📊 **Player cards and leaderboards**\n\n"
-            "**PLAY • COMPETE • WIN**\n"
-            "**YOUR GAME YOUR CHALLENGE.**\n\n"
-            "💜 **MHN ARCADE V2.0 — THE NEXT LEVEL.**"
+            "🎭 **Character selection**\n"
+            "🎮 **Games, challenges and competitions**\n"
+            "📊 **Player cards, stats and leaderboards**\n\n"
+            "🚀 **MHN ARCADE supports V2 and V3!**\n"
+            "V2 is the foundation, while V3 is an enhanced "
+            "version of the arcade engine. More games and "
+            "features will be added over time.\n\n"
+            "**The future roadmap:**\n"
+            "V4 → V5 → V6\n\n"
+            "💜 **PLAY • COMPETE • WIN**"
         ),
         color=PURPLE
     )
 
     embed.set_footer(
-        text="MHN ARCADE V2.0 • PLAY • COMPETE • WIN"
+        text="MHN ARCADE • V2 + V3 • PLAY • COMPETE • WIN"
     )
 
     return embed
@@ -390,7 +402,7 @@ async def initialize_welcome_messages():
 def create_arabic_guide():
 
     return build_embed(
-        "📘 دليل MHN ARCADE V2.0",
+        "📘 دليل MHN ARCADE V2 + V3",
         (
             "أهلًا بك في MHN ARCADE! 💜\n\n"
             "**🎮 البداية**\n"
@@ -407,6 +419,10 @@ def create_arabic_guide():
             "• `/withdraw` لسحب العملات من البنك.\n\n"
             "**📊 بطاقة اللاعب**\n"
             "استخدم زر بطاقة اللاعب في القناة المخصصة.\n\n"
+            "**⚙️ محركات الألعاب**\n"
+            "V2 هو أساس الأركيد، وV3 محرك محسّن "
+            "تتم إضافة ألعاب وميزات جديدة إليه تدريجيًا.\n\n"
+            "تابع قناة الإنجازات لمعرفة الرتب ومستويات فتحها.\n\n"
             "**💜 استمتع باللعب والتحدي!**"
         )
     )
@@ -415,7 +431,7 @@ def create_arabic_guide():
 def create_english_guide():
 
     return build_embed(
-        "📘 MHN ARCADE V2.0 Guide",
+        "📘 MHN ARCADE V2 + V3 Guide",
         (
             "Welcome to MHN ARCADE! 💜\n\n"
             "**🎮 Getting Started**\n"
@@ -432,7 +448,54 @@ def create_english_guide():
             "• `/withdraw` to withdraw coins.\n\n"
             "**📊 Player Card**\n"
             "Use the player card button in the designated channel.\n\n"
+            "**⚙️ Game Engines**\n"
+            "V2 is the arcade foundation, while V3 is an "
+            "enhanced engine receiving additional games and features.\n\n"
+            "Check the achievements channel for rank requirements.\n\n"
             "**💜 Play • Compete • Win!**"
+        )
+    )
+
+
+# ========================================================
+# RANK GUIDE
+# ========================================================
+
+def create_rank_guide():
+
+    return build_embed(
+        "🏆 دليل الرتب والمستويات | Rank Progression",
+        (
+            "**💜 رتب MHN ARCADE**\n\n"
+            "كلما ارتفع مستواك، اقتربت من الرتبة التالية!\n"
+            "اجمع XP من الألعاب وتقدم في رحلتك.\n\n"
+            "🥉 **ROOKIE**\n"
+            "المستوى 0 – 9\n\n"
+            "🔹 **APPRENTICE**\n"
+            "المستوى 10+\n\n"
+            "🔹 **PRO**\n"
+            "المستوى 25+\n\n"
+            "🔷 **ELITE**\n"
+            "المستوى 50+\n\n"
+            "💎 **MASTER**\n"
+            "المستوى 100+\n\n"
+            "👑 **MANAGER**\n"
+            "المستوى 175+\n\n"
+            "🔥 **GRANDMASTER**\n"
+            "المستوى 300+\n\n"
+            "🌌 **MYTHIC**\n"
+            "المستوى 500+\n\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "**English Rank Guide**\n\n"
+            "ROOKIE — Level 0+\n"
+            "APPRENTICE — Level 10+\n"
+            "PRO — Level 25+\n"
+            "ELITE — Level 50+\n"
+            "MASTER — Level 100+\n"
+            "MANAGER — Level 175+\n"
+            "GRANDMASTER — Level 300+\n"
+            "MYTHIC — Level 500+\n\n"
+            "💜 Keep playing. Keep progressing. Become a legend!"
         )
     )
 
@@ -676,7 +739,7 @@ def create_player_card_embed(guild, user, language):
         embed.set_thumbnail(url=character["image_url"])
 
     embed.set_footer(
-        text="MHN ARCADE V2.0 • PLAYER PROFILE"
+        text="MHN ARCADE V2 + V3 • PLAYER PROFILE"
     )
 
     return embed
@@ -1334,6 +1397,14 @@ async def initialize_arcade_systems(guild):
         view=PlayerCardPanelView()
     )
 
+    # Persistent rank guide in the achievements channel.
+    await ensure_saved_embed_message(
+        guild,
+        "rank_guide",
+        ACHIEVEMENTS_CHANNEL_ID,
+        create_rank_guide()
+    )
+
     await refresh_leaderboard(guild)
 
     logger.info(
@@ -1350,7 +1421,7 @@ async def initialize_arcade_systems(guild):
 async def on_ready():
 
     logger.info("=" * 45)
-    logger.info("💜 MHN ARCADE V2.0")
+    logger.info("💜 MHN ARCADE V2 + V3")
     logger.info("Logged in as: %s", bot.user)
     logger.info("Bot ID: %s", bot.user.id)
     logger.info("Servers: %s", len(bot.guilds))
@@ -1493,14 +1564,14 @@ async def announce_update_command(
 
 @bot.tree.command(
     name="ping",
-    description="Check MHN ARCADE V2.0 connection"
+    description="Check MHN ARCADE V2 + V3 connection"
 )
 async def ping(interaction: discord.Interaction):
 
     latency = round(bot.latency * 1000)
 
     embed = build_embed(
-        "💜 MHN ARCADE V2.0",
+        "💜 MHN ARCADE V2 + V3",
         (
             "The arcade system is online!\n\n"
             f"🏓 **Ping:** {latency} ms"
@@ -2047,6 +2118,6 @@ async def on_app_command_error(
 
 if __name__ == "__main__":
 
-    logger.info("Starting MHN ARCADE V2.0...")
+    logger.info("Starting MHN ARCADE V2 + V3...")
 
     bot.run(TOKEN)
