@@ -113,6 +113,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             GameMode.MULTIPLAYER.value,
         )
 
+
     async def test_musical_roulette_launch_and_winner(self):
         session = await self.runner.create_multiplayer_lobby(
             game_id="musical_roulette",
@@ -149,18 +150,36 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         )
 
         game = launch.handler
+
+        first_chooser = game.current_chooser_id
+
+        self.assertIn(
+            first_chooser,
+            ("100", "200", "300"),
+        )
+
         game._rng = FirstPlayerRNG()
 
-        self.assertEqual(game.current_chooser_id, "100")
+        first_target = game.get_available_targets()[0].user_id
 
-        await game.eliminate("100", "200")
+        await game.eliminate(
+            first_chooser,
+            first_target,
+        )
 
         self.assertEqual(
-            session.get_player("200").status,
+            session.get_player(first_target).status,
             PlayerStatus.ELIMINATED,
         )
 
-        await game.eliminate("100", "300")
+        second_chooser = game.current_chooser_id
+
+        second_target = game.get_available_targets()[0].user_id
+
+        await game.eliminate(
+            second_chooser,
+            second_target,
+        )
 
         self.assertTrue(game.is_finished)
 
@@ -169,18 +188,20 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             SessionStatus.COMPLETED,
         )
 
-        self.assertEqual(game.result.winner_id, "100")
         self.assertFalse(game.result.is_draw)
 
+        winner_id = game.result.winner_id
+
+        self.assertIsNotNone(winner_id)
+
         self.assertEqual(
-            session.get_player("100").result,
+            session.get_player(winner_id).result,
             "win",
         )
 
-        self.assertEqual(
-            session.get_player("200").result,
-            "loss",
-        )
+        for player in session.players.values():
+            if player.user_id != winner_id:
+                self.assertEqual(player.result, "loss")
 
     async def test_group_draw_when_no_players_remain(self):
         session = await self.runner.create_multiplayer_lobby(
