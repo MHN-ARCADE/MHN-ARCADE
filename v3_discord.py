@@ -761,6 +761,8 @@ class MusicalRouletteLobbyView(discord.ui.View):
             )
 
     async def on_timeout(self) -> None:
+        if self.superseded:
+            return
 
         for item in self.children:
             item.disabled = True
