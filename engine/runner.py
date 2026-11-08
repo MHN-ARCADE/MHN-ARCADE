@@ -131,30 +131,6 @@ class GameRunner:
                 f"'{game_definition.game_id}': {exc}"
             ) from exc
 
-    @staticmethod
-    async def _create_handler(
-        definition: GameDefinition,
-        **context: Any,
-    ) -> Any:
-
-        factory = definition.handler_factory
-
-        if factory is None:
-            return None
-
-        try:
-            handler = factory(**context)
-
-            if inspect.isawaitable(handler):
-                handler = await handler
-
-            return handler
-
-        except Exception as exc:
-            raise RunnerError(
-                f"Could not create handler for "
-                f"'{definition.game_id}': {exc}"
-            ) from exc
 
     @staticmethod
     async def _start_handler(
