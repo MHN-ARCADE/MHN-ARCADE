@@ -224,6 +224,34 @@ class DiscordOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
         view.stop()
 
-DiscordExtensionLifecycleTests
+class DiscordExtensionLifecycleTests(unittest.IsolatedAsyncioTestCase):
+
+    @patch("v3_discord.V3Runtime")
+    async def test_extension_setup_and_teardown(self, mock_runtime):
+        runtime = mock_runtime.return_value
+        runtime.initialize = AsyncMock()
+        runtime.shutdown = AsyncMock()
+
+        bot = SimpleNamespace(
+            add_cog=AsyncMock()
+        )
+
+        await setup(bot)
+
+        runtime.initialize.assert_awaited_once()
+        bot.add_cog.assert_awaited_once()
+
+        self.assertIs(
+            bot.v3_runtime,
+            runtime,
+        )
+
+        await teardown(bot)
+
+        runtime.shutdown.assert_awaited_once()
+
+        self.assertFalse(
+            hasattr(bot, "v3_runtime")
+        )
 if __name__ == "__main__":
     unittest.main()
