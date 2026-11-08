@@ -256,36 +256,43 @@ class DiscordExtensionLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 class DiscordExtensionLoadingTests(unittest.IsolatedAsyncioTestCase):
 
-    @patch("v3_discord.V3Runtime")
-    async def test_real_extension_loader(self, mock_runtime):
+    async def test_real_extension_loader(self):
         import discord
+        import os
+        import tempfile
+
+        from pathlib import Path
+        from unittest.mock import patch
         from discord.ext import commands
 
-        runtime = mock_runtime.return_value
-        runtime.initialize = AsyncMock()
-        runtime.shutdown = AsyncMock()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "v3_test.db"
 
-        bot = commands.Bot(
-            command_prefix="!",
-            intents=discord.Intents.none(),
-        )
+            with patch.dict(
+                os.environ,
+                {"MHN_ARCADE_V3_DB_PATH": str(db_path)},
+            ):
+                bot = commands.Bot(
+                    command_prefix="!",
+                    intents=discord.Intents.none(),
+                )
 
-        try:
-            await bot.load_extension("v3_discord")
+                try:
+                    await bot.load_extension("v3_discord")
 
-            self.assertIn("v3_discord", bot.extensions)
-            self.assertIs(bot.v3_runtime, runtime)
-            runtime.initialize.assert_awaited_once()
+                    self.assertIn("v3_discord", bot.extensions)
+                    self.assertTrue(bot.v3_runtime.initialized)
+                    self.assertTrue(db_path.exists())
 
-            await bot.unload_extension("v3_discord")
+                    await bot.unload_extension("v3_discord")
 
-            runtime.shutdown.assert_awaited_once()
-            self.assertFalse(hasattr(bot, "v3_runtime"))
+                    self.assertFalse(bot.v3_runtime.initialized)
+                    self.assertFalse(hasattr(bot, "v3_runtime"))
 
-        finally:
-            if "v3_discord" in bot.extensions:
-                await bot.unload_extension("v3_discord")
+                finally:
+                    if "v3_discord" in bot.extensions:
+                        await bot.unload_extension("v3_discord")
 
-            await bot.close()
+                    await bot.close()
 if __name__ == "__main__":
     unittest.main()
