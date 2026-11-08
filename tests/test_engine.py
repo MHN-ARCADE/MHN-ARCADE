@@ -83,7 +83,14 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNone(launch.session)
-        self.assertIsNone(launch.handler)
+        self.assertIsNotNone(launch.handler)
+
+        result = launch.handler.flip()
+
+        self.assertEqual(result.player_id, "100")
+        self.assertEqual(result.player_name, "PlayerOne")
+        self.assertIn(result.side, ("heads", "tails"))
+        self.assertEqual(result.flip_number, 1)
 
     async def test_multiplayer_lobby_creation(self):
         session = await self.runner.create_multiplayer_lobby(
