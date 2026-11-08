@@ -224,6 +224,6 @@ class DiscordOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
         view.stop()
 
-
+DiscordExtensionLifecycleTests
 if __name__ == "__main__":
     unittest.main()
