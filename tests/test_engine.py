@@ -10,8 +10,12 @@ Tests for:
 - Winner results
 - Group draw results
 - Player reconnection
+- Disconnect grace expiration
+- Voluntary surrender
+- Lobby host transfer
 """
 
+import asyncio
 import unittest
 
 from engine.catalog import (
@@ -205,8 +209,6 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
 
         game = launch.handler
 
-        # Simulate every player having surrendered or expired.
-        # This isolates the group-draw finalization scenario.
         for player in session.players.values():
             player.status = PlayerStatus.SURRENDERED
 
@@ -214,7 +216,6 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(game.is_finished)
         self.assertTrue(result.is_draw)
-
         self.assertIsNone(result.winner_id)
 
         self.assertEqual(
@@ -267,6 +268,133 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             session.get_player("200").status,
             PlayerStatus.ACTIVE,
         )
+
+    async def test_disconnect_grace_expiration(self):
+        sessions = SessionManager(
+            disconnect_grace_seconds=0.01
+        )
+
+        session = await sessions.create_session(
+            guild_id="guild-5",
+            game_id="musical_roulette",
+            host_id="100",
+            host_name="PlayerOne",
+            min_players=2,
+        )
+
+        await sessions.join(
+            session.session_id,
+            "200",
+            "PlayerTwo",
+        )
+
+        await sessions.start(
+            session.session_id,
+            "100",
+        )
+
+        events = []
+
+        sessions.add_session_listener(
+            session.session_id,
+            lambda current_session, user_id, event:
+                events.append((user_id, event)),
+        )
+
+        await sessions.mark_disconnected(
+            session.session_id,
+            "200",
+        )
+
+        self.assertEqual(
+            session.get_player("200").status,
+            PlayerStatus.DISCONNECTED,
+        )
+
+        await asyncio.sleep(0.05)
+
+        self.assertEqual(
+            session.get_player("200").status,
+            PlayerStatus.SURRENDERED,
+        )
+
+        self.assertIn(
+            ("200", "disconnect_expired"),
+            events,
+        )
+
+    async def test_voluntary_leave_causes_surrender(self):
+        session = await self.sessions.create_session(
+            guild_id="guild-6",
+            game_id="musical_roulette",
+            host_id="100",
+            host_name="PlayerOne",
+            min_players=2,
+        )
+
+        await self.sessions.join(
+            session.session_id,
+            "200",
+            "PlayerTwo",
+        )
+
+        await self.sessions.start(
+            session.session_id,
+            "100",
+        )
+
+        events = []
+
+        self.sessions.add_session_listener(
+            session.session_id,
+            lambda current_session, user_id, event:
+                events.append((user_id, event)),
+        )
+
+        await self.sessions.leave(
+            session.session_id,
+            "200",
+        )
+
+        self.assertEqual(
+            session.get_player("200").status,
+            PlayerStatus.SURRENDERED,
+        )
+
+        self.assertIn(
+            ("200", "surrendered"),
+            events,
+        )
+
+    async def test_lobby_host_transfer(self):
+        session = await self.sessions.create_session(
+            guild_id="guild-7",
+            game_id="musical_roulette",
+            host_id="100",
+            host_name="PlayerOne",
+            min_players=2,
+        )
+
+        await self.sessions.join(
+            session.session_id,
+            "200",
+            "PlayerTwo",
+        )
+
+        await self.sessions.join(
+            session.session_id,
+            "300",
+            "PlayerThree",
+        )
+
+        await self.sessions.leave(
+            session.session_id,
+            "100",
+        )
+
+        self.assertEqual(session.host_id, "200")
+        self.assertEqual(session.status, SessionStatus.LOBBY)
+        self.assertNotIn("100", session.players)
 
 
 if __name__ == "__main__":
