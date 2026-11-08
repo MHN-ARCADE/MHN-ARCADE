@@ -552,7 +552,7 @@ class MusicalRouletteLobbyView(discord.ui.View):
         self.language = language
         self.message = None
         self.closed = False
-
+        self.superseded = False
         self.join_button.label = t("roulette_join", language)
         self.leave_button.label = t("roulette_leave", language)
         self.start_button.label = t("roulette_start", language)
@@ -790,7 +790,7 @@ class MusicalRouletteGameView(discord.ui.View):
         self.handler = handler
         self.language = language
         self.message = None
-
+        self.superseded = False
         self._build_target_buttons()
 
     def _build_target_buttons(self) -> None:
