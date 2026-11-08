@@ -286,7 +286,7 @@ class DiscordExtensionLoadingTests(unittest.IsolatedAsyncioTestCase):
 
                     await bot.unload_extension("v3_discord")
 
-                    self.assertFalse(bot.v3_runtime.initialized)
+
                     self.assertFalse(hasattr(bot, "v3_runtime"))
 
                 finally:
