@@ -689,7 +689,7 @@ class MusicalRouletteLobbyView(discord.ui.View):
             )
 
             game_view.message = interaction.message
-
+            self.superseded = True
             await interaction.response.edit_message(
                 embed=build_roulette_game_embed(
                     launch.handler,
