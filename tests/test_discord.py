@@ -13,7 +13,7 @@ Tests for:
 
 import unittest
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from types import SimpleNamespace
 
 from discord import Embed
