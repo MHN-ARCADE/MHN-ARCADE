@@ -20,7 +20,7 @@ from engine.runtime import V3Runtime
 logger = logging.getLogger("mhn.arcade.v3.discord")
 
 PURPLE = 0x7C3AED
-GAMES_PER_PAGE = 6
+GAMES_PER_PAGE = 4
 DESCRIPTION_LIMIT = 550
 
 
