@@ -8,7 +8,7 @@ Responsibilities:
 - Create multiplayer lobbies
 - Start registered multiplayer games
 - Prepare single-player games
-- Create game handlers when available
+- Create and initialize game handlers
 
 This module is independent from Discord.py and database code.
 """
@@ -49,7 +49,7 @@ class GameLaunch:
         Registered game definition.
 
     handler:
-        Game-specific handler instance, if one is available.
+        Game-specific handler instance, if available.
     """
 
     definition: GameDefinition
@@ -65,7 +65,7 @@ class GameRunner:
     """
     Coordinates game definitions, lobbies, sessions, and handlers.
 
-    Game mechanics should remain inside their own handler modules.
+    Game mechanics remain inside their own handler modules.
     """
 
     def __init__(
@@ -152,6 +152,37 @@ class GameRunner:
                 f"'{definition.game_id}': {exc}"
             ) from exc
 
+    @staticmethod
+    async def _start_handler(
+        definition: GameDefinition,
+        handler: Any,
+    ) -> None:
+        """
+        Initialize a handler after its session has started.
+
+        Supports both synchronous and asynchronous start methods.
+        """
+
+        if handler is None:
+            return
+
+        start_method = getattr(handler, "start", None)
+
+        if not callable(start_method):
+            return
+
+        try:
+            result = start_method()
+
+            if inspect.isawaitable(result):
+                await result
+
+        except Exception as exc:
+            raise RunnerError(
+                f"Could not start handler for "
+                f"'{definition.game_id}': {exc}"
+            ) from exc
+
     # =====================================================
     # CREATE MULTIPLAYER LOBBY
     # =====================================================
@@ -221,7 +252,6 @@ class GameRunner:
 
         lobby_metadata = dict(metadata or {})
 
-        # Keep the registered game ID in session metadata.
         lobby_metadata["game_name_en"] = definition.name_en
         lobby_metadata["game_name_ar"] = definition.name_ar
         lobby_metadata["game_mode"] = definition.mode.value
@@ -249,7 +279,9 @@ class GameRunner:
         session = await self.lobbies.get(session_id)
 
         if session is None:
-            raise RunnerError("Multiplayer session does not exist.")
+            raise RunnerError(
+                "Multiplayer session does not exist."
+            )
 
         definition = self._get_definition(session.game_id)
 
@@ -268,17 +300,26 @@ class GameRunner:
             session.player_count,
         )
 
-        # Create the handler before starting the session.
-        # If handler creation fails, the lobby remains open.
+        # Prepare the handler before changing the session state.
+        # This keeps the lobby open if handler creation fails.
         handler = await self._create_handler(
             definition,
             session=session,
+            session_manager=self.lobbies.sessions,
             definition=definition,
         )
 
+        # Start the session first because game handlers may
+        # require SessionStatus.RUNNING during initialization.
         started_session = await self.lobbies.start(
             session_id=session_id,
             host_id=host_id,
+        )
+
+        # Initialize the actual game mechanics.
+        await self._start_handler(
+            definition,
+            handler,
         )
 
         return GameLaunch(
