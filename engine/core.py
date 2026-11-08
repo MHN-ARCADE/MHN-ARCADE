@@ -1,3 +1,4 @@
+
 """
 MHN ARCADE V3 - Core Engine
 
@@ -9,7 +10,8 @@ Handles:
 - Host permissions
 - Voluntary leaving
 - Disconnect and reconnect grace period
-- Match results
+- Session lifecycle notifications
+- Match results and cancellation
 
 This module does not contain Discord UI or database code.
 """
@@ -17,12 +19,13 @@ This module does not contain Discord UI or database code.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import secrets
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 # =========================================================
@@ -131,11 +134,18 @@ class GameSession:
 
 class SessionManager:
     """
-    Central manager for all active game sessions.
+    Central manager for all game sessions.
 
-    The manager is independent from Discord.py.
-    Discord commands, buttons and game logic should call
-    this manager instead of modifying sessions directly.
+    Session listeners receive:
+        callback(session, user_id, event)
+
+    Supported events:
+        disconnected
+        reconnected
+        surrendered
+        disconnect_expired
+
+    Callbacks may be synchronous or asynchronous.
     """
 
     VALID_RESULTS = {"win", "loss", "draw"}
@@ -148,13 +158,16 @@ class SessionManager:
 
         self._sessions: dict[str, GameSession] = {}
 
-        # A player can only belong to one active session
-        # per Discord server.
         self._user_sessions: dict[tuple[str, str], str] = {}
 
         self._disconnect_tasks: dict[
             tuple[str, str],
             asyncio.Task,
+        ] = {}
+
+        self._session_listeners: dict[
+            str,
+            set[Callable[[GameSession, str, str], Any]],
         ] = {}
 
         self._lock = asyncio.Lock()
@@ -176,10 +189,7 @@ class SessionManager:
         return session
 
     @staticmethod
-    def _require_host(
-        session: GameSession,
-        user_id: str,
-    ) -> None:
+    def _require_host(session: GameSession, user_id: str) -> None:
         if session.host_id != user_id:
             raise SessionError("Only the session host can do this.")
 
@@ -208,6 +218,79 @@ class SessionManager:
                 session.session_id,
                 user_id,
             )
+
+        self._session_listeners.pop(session.session_id, None)
+
+    async def _notify_session_listeners(
+        self,
+        session_id: str,
+        user_id: str,
+        event: str,
+    ) -> None:
+        """
+        Notify listeners outside the manager lock.
+
+        Listener failures must not undo or block a session state change.
+        """
+
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            listeners = tuple(
+                self._session_listeners.get(session_id, set())
+            )
+
+        if session is None or not listeners:
+            return
+
+        for callback in listeners:
+            try:
+                result = callback(session, user_id, event)
+
+                if inspect.isawaitable(result):
+                    await result
+
+            except Exception:
+                # A game listener must not break the session manager.
+                continue
+
+    # =====================================================
+    # SESSION LISTENERS
+    # =====================================================
+
+    def add_session_listener(
+        self,
+        session_id: str,
+        callback: Callable[[GameSession, str, str], Any],
+    ) -> None:
+        if not callable(callback):
+            raise SessionError("Session listener must be callable.")
+
+        session_id = str(session_id)
+
+        if session_id not in self._sessions:
+            raise SessionError("Session does not exist.")
+
+        self._session_listeners.setdefault(
+            session_id,
+            set(),
+        ).add(callback)
+
+    def remove_session_listener(
+        self,
+        session_id: str,
+        callback: Callable[[GameSession, str, str], Any],
+    ) -> None:
+        session_id = str(session_id)
+
+        listeners = self._session_listeners.get(session_id)
+
+        if listeners is None:
+            return
+
+        listeners.discard(callback)
+
+        if not listeners:
+            self._session_listeners.pop(session_id, None)
 
     # =====================================================
     # CREATE SESSION
@@ -239,7 +322,6 @@ class SessionManager:
             )
 
         async with self._lock:
-
             user_key = (guild_id, host_id)
 
             if user_key in self._user_sessions:
@@ -286,7 +368,6 @@ class SessionManager:
         user_id = self._normalize_id(user_id)
 
         async with self._lock:
-
             session = self._get_session_unlocked(session_id)
 
             if session.status != SessionStatus.LOBBY:
@@ -325,9 +406,9 @@ class SessionManager:
     ) -> GameSession:
 
         user_id = self._normalize_id(user_id)
+        notify_surrender = False
 
         async with self._lock:
-
             session = self._get_session_unlocked(session_id)
 
             player = session.players.get(user_id)
@@ -335,9 +416,7 @@ class SessionManager:
             if player is None:
                 raise SessionError("You are not in this session.")
 
-            # Leaving before the game starts.
             if session.status == SessionStatus.LOBBY:
-
                 session.players.pop(user_id, None)
 
                 self._user_sessions.pop(
@@ -346,19 +425,19 @@ class SessionManager:
                 )
 
                 if user_id == session.host_id:
-
                     if session.players:
-                        # Dictionary order preserves join order.
                         session.host_id = next(iter(session.players))
                     else:
                         session.status = SessionStatus.CANCELLED
                         self._sessions.pop(session.session_id, None)
+                        self._session_listeners.pop(
+                            session.session_id,
+                            None,
+                        )
 
                 return session
 
-            # Leaving after the game starts means surrender.
             if session.status == SessionStatus.RUNNING:
-
                 if player.status in (
                     PlayerStatus.ACTIVE,
                     PlayerStatus.DISCONNECTED,
@@ -371,9 +450,20 @@ class SessionManager:
                         user_id,
                     )
 
-                return session
+                    notify_surrender = True
 
-            raise SessionError("This session is no longer active.")
+                result_session = session
+            else:
+                raise SessionError("This session is no longer active.")
+
+        if notify_surrender:
+            await self._notify_session_listeners(
+                session.session_id,
+                user_id,
+                "surrendered",
+            )
+
+        return result_session
 
     # =====================================================
     # START SESSION
@@ -388,7 +478,6 @@ class SessionManager:
         user_id = self._normalize_id(user_id)
 
         async with self._lock:
-
             session = self._get_session_unlocked(session_id)
 
             self._require_host(session, user_id)
@@ -419,7 +508,6 @@ class SessionManager:
         user_id = self._normalize_id(user_id)
 
         async with self._lock:
-
             session = self._get_session_unlocked(session_id)
 
             if session.status != SessionStatus.RUNNING:
@@ -438,6 +526,7 @@ class SessionManager:
             player.status = PlayerStatus.DISCONNECTED
             player.disconnected_at = datetime.now(timezone.utc)
 
+            disconnect_time = player.disconnected_at
             key = (session.session_id, user_id)
 
             self._cancel_disconnect_task_unlocked(
@@ -449,13 +538,19 @@ class SessionManager:
                 self._expire_disconnect(
                     session.session_id,
                     user_id,
-                    player.disconnected_at,
+                    disconnect_time,
                 )
             )
 
             self._disconnect_tasks[key] = task
 
-            return session
+        await self._notify_session_listeners(
+            session.session_id,
+            user_id,
+            "disconnected",
+        )
+
+        return session
 
     async def reconnect(
         self,
@@ -464,10 +559,13 @@ class SessionManager:
     ) -> bool:
 
         user_id = self._normalize_id(user_id)
+        event: str | None = None
 
         async with self._lock:
-
             session = self._get_session_unlocked(session_id)
+
+            if session.status != SessionStatus.RUNNING:
+                return False
 
             player = session.players.get(user_id)
 
@@ -488,7 +586,6 @@ class SessionManager:
             ).total_seconds()
 
             if elapsed >= self.disconnect_grace_seconds:
-
                 player.status = PlayerStatus.SURRENDERED
                 player.disconnected_at = None
 
@@ -497,17 +594,29 @@ class SessionManager:
                     user_id,
                 )
 
-                return False
+                event = "disconnect_expired"
+                reconnected = False
 
-            self._cancel_disconnect_task_unlocked(
+            else:
+                self._cancel_disconnect_task_unlocked(
+                    session.session_id,
+                    user_id,
+                )
+
+                player.status = PlayerStatus.ACTIVE
+                player.disconnected_at = None
+
+                event = "reconnected"
+                reconnected = True
+
+        if event is not None:
+            await self._notify_session_listeners(
                 session.session_id,
                 user_id,
+                event,
             )
 
-            player.status = PlayerStatus.ACTIVE
-            player.disconnected_at = None
-
-            return True
+        return reconnected
 
     async def _expire_disconnect(
         self,
@@ -518,15 +627,18 @@ class SessionManager:
 
         key = (session_id, user_id)
         current_task = asyncio.current_task()
+        expired = False
 
         try:
             await asyncio.sleep(self.disconnect_grace_seconds)
 
             async with self._lock:
-
                 session = self._sessions.get(session_id)
 
                 if session is None:
+                    return
+
+                if session.status != SessionStatus.RUNNING:
                     return
 
                 player = session.players.get(user_id)
@@ -534,20 +646,25 @@ class SessionManager:
                 if player is None:
                     return
 
-                # Do not expire a newer disconnect period.
                 if player.disconnected_at != disconnect_time:
                     return
 
                 if player.status == PlayerStatus.DISCONNECTED:
                     player.status = PlayerStatus.SURRENDERED
                     player.disconnected_at = None
+                    expired = True
+
+            if expired:
+                await self._notify_session_listeners(
+                    session_id,
+                    user_id,
+                    "disconnect_expired",
+                )
 
         except asyncio.CancelledError:
             pass
 
         finally:
-            # Only remove the task entry if it still belongs
-            # to this exact task.
             if self._disconnect_tasks.get(key) is current_task:
                 self._disconnect_tasks.pop(key, None)
 
@@ -582,7 +699,6 @@ class SessionManager:
             winner_id = self._normalize_id(winner_id)
 
         async with self._lock:
-
             session = self._get_session_unlocked(session_id)
 
             if session.status != SessionStatus.RUNNING:
@@ -597,7 +713,6 @@ class SessionManager:
                 )
 
             if winner_id is not None:
-
                 if winner_id not in session.players:
                     raise SessionError("Winner is not in this session.")
 
@@ -607,7 +722,6 @@ class SessionManager:
                     )
 
             for user_id, result in normalized_results.items():
-
                 player = session.players[user_id]
                 player.result = result
 
@@ -630,6 +744,34 @@ class SessionManager:
             return session
 
     # =====================================================
+    # CANCEL RUNNING SESSION
+    # =====================================================
+
+    async def cancel_running(
+        self,
+        session_id: str,
+        reason: str | None = None,
+    ) -> GameSession:
+
+        async with self._lock:
+            session = self._get_session_unlocked(session_id)
+
+            if session.status != SessionStatus.RUNNING:
+                raise SessionError(
+                    "Only a running match can be cancelled this way."
+                )
+
+            session.status = SessionStatus.CANCELLED
+            session.finished_at = datetime.now(timezone.utc)
+
+            if reason:
+                session.metadata["cancellation_reason"] = str(reason)
+
+            self._remove_session_indexes_unlocked(session)
+
+            return session
+
+    # =====================================================
     # CANCEL LOBBY
     # =====================================================
 
@@ -642,7 +784,6 @@ class SessionManager:
         user_id = self._normalize_id(user_id)
 
         async with self._lock:
-
             session = self._get_session_unlocked(session_id)
 
             self._require_host(session, user_id)
@@ -653,9 +794,9 @@ class SessionManager:
                 )
 
             session.status = SessionStatus.CANCELLED
+            session.finished_at = datetime.now(timezone.utc)
 
             self._remove_session_indexes_unlocked(session)
-
             self._sessions.pop(session.session_id, None)
 
             return session
@@ -682,7 +823,6 @@ class SessionManager:
         user_id = self._normalize_id(user_id)
 
         async with self._lock:
-
             session_id = self._user_sessions.get(
                 (guild_id, user_id)
             )
@@ -699,7 +839,6 @@ class SessionManager:
     ) -> list[GameSession]:
 
         async with self._lock:
-
             sessions = list(self._sessions.values())
 
             if guild_id is not None:
@@ -725,16 +864,13 @@ class SessionManager:
     # =====================================================
 
     async def shutdown(self) -> None:
-        """
-        Cancel background disconnect timers.
-        Call this when shutting down the bot.
-        """
+        """Cancel background disconnect timers."""
 
         async with self._lock:
-
             tasks = list(self._disconnect_tasks.values())
 
             self._disconnect_tasks.clear()
+            self._session_listeners.clear()
 
             for task in tasks:
                 if not task.done():
