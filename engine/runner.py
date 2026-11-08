@@ -104,7 +104,32 @@ class GameRunner:
             )
 
         return definition
+    
+    @staticmethod
+    def _validate_player_count(
+        definition: GameDefinition,
+        player_count: int,
+    ) -> None:
 
+        if (
+            not isinstance(player_count, int)
+            or isinstance(player_count, bool)
+        ):
+            raise RunnerError(
+                "Player count must be an integer."
+            )
+
+        if player_count < definition.min_players:
+            raise RunnerError(
+                f"'{definition.game_id}' requires at least "
+                f"{definition.min_players} players."
+            )
+
+        if player_count > definition.max_players:
+            raise RunnerError(
+                f"'{definition.game_id}' supports a maximum of "
+                f"{definition.max_players} players."
+            )
 
     @staticmethod
     async def _create_handler(
