@@ -105,29 +105,31 @@ class GameRunner:
 
         return definition
 
-    @staticmethod
-    def _validate_player_count(
-        definition: GameDefinition,
-        player_count: int,
-    ) -> None:
 
-        if (
-            not isinstance(player_count, int)
-            or isinstance(player_count, bool)
-        ):
-            raise RunnerError("Player count must be an integer.")
+@staticmethod
+async def _create_handler(
+    game_definition: GameDefinition,
+    **context: Any,
+) -> Any:
 
-        if player_count < definition.min_players:
-            raise RunnerError(
-                f"{definition.name_en} requires at least "
-                f"{definition.min_players} players."
-            )
+    factory = game_definition.handler_factory
 
-        if player_count > definition.max_players:
-            raise RunnerError(
-                f"{definition.name_en} supports at most "
-                f"{definition.max_players} players."
-            )
+    if factory is None:
+        return None
+
+    try:
+        handler = factory(**context)
+
+        if inspect.isawaitable(handler):
+            handler = await handler
+
+        return handler
+
+    except Exception as exc:
+        raise RunnerError(
+            f"Could not create handler for "
+            f"'{game_definition.game_id}': {exc}"
+        ) from exc
 
     @staticmethod
     async def _create_handler(
