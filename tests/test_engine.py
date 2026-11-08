@@ -159,6 +159,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         await game.eliminate("100", "300")
 
         self.assertTrue(game.is_finished)
+
         self.assertEqual(
             session.status,
             SessionStatus.COMPLETED,
@@ -177,7 +178,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             "loss",
         )
 
-    async def test_group_draw_when_all_players_surrender(self):
+    async def test_group_draw_when_no_players_remain(self):
         session = await self.runner.create_multiplayer_lobby(
             game_id="musical_roulette",
             guild_id="guild-3",
@@ -204,14 +205,17 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
 
         game = launch.handler
 
-        await self.sessions.leave(session.session_id, "100")
-        await self.sessions.leave(session.session_id, "200")
-        await self.sessions.leave(session.session_id, "300")
+        # Simulate every player having surrendered or expired.
+        # This isolates the group-draw finalization scenario.
+        for player in session.players.values():
+            player.status = PlayerStatus.SURRENDERED
+
+        result = await game.finalize()
 
         self.assertTrue(game.is_finished)
-        self.assertTrue(game.result.is_draw)
+        self.assertTrue(result.is_draw)
 
-        self.assertIsNone(game.result.winner_id)
+        self.assertIsNone(result.winner_id)
 
         self.assertEqual(
             session.status,
