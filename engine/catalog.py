@@ -42,7 +42,25 @@ def create_musical_roulette_handler(
         session_manager=session_manager,
     )
 
+def create_coin_flip_handler(
+    *,
+    player_id: str,
+    player_name: str,
+    metadata: Any = None,
+    definition: GameDefinition | None = None,
+) -> Any:
+    """
+    Create a Coin Flip handler.
+    """
 
+    from .games.coin_flip import CoinFlip
+
+    return CoinFlip(
+        player_id=player_id,
+        player_name=player_name,
+        metadata=metadata,
+        definition=definition,
+    )
 # =========================================================
 # DEFAULT GAME DEFINITIONS
 # =========================================================
