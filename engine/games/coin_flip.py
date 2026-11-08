@@ -165,6 +165,6 @@ class CoinFlip:
                     "side_ar": result.side_ar,
                     "flip_number": result.flip_number,
                 }
-                for result in self._history
+                                for result in self._history
             ],
         }
