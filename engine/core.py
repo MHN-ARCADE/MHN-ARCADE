@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import secrets
+from enum import Enum
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
