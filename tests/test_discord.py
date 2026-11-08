@@ -25,6 +25,8 @@ from v3_discord import (
     CatalogView,
     build_catalog_pages,
     safe_text,
+    setup,
+    teardown,
 )
 
 
