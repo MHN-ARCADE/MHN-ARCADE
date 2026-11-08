@@ -880,7 +880,7 @@ class MusicalRouletteGameView(discord.ui.View):
             )
 
             next_view.message = interaction.message
-
+            self.superseded = True
             await interaction.response.edit_message(
                 embed=build_roulette_game_embed(
                     self.handler,
@@ -900,7 +900,8 @@ class MusicalRouletteGameView(discord.ui.View):
             )
 
     async def on_timeout(self) -> None:
-
+        if self.superseded:
+            return
         for item in self.children:
             item.disabled = True
 
