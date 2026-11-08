@@ -1,10 +1,12 @@
+
 """
 MHN ARCADE V3 - Musical Roulette
 
 Core game mechanics for the multiplayer elimination game.
 
 This module is independent from Discord.py.
-It manages turns, eliminations, and final session results.
+It manages turns, eliminations, disconnects, reconnects,
+and final session results.
 """
 
 from __future__ import annotations
@@ -68,7 +70,11 @@ class MusicalRoulette:
     - The chooser eliminates another active player.
     - A player cannot eliminate themselves.
     - Eliminated players cannot be selected again.
-    - The last remaining player wins.
+    - Disconnected players remain in the match during grace time.
+    - Disconnected players cannot take turns or be selected.
+    - The last remaining eligible player wins.
+    - Voluntary leaving means immediate surrender.
+    - Disconnecting grants the configured reconnect grace period.
     - Final results are recorded by SessionManager.
     """
 
@@ -102,6 +108,7 @@ class MusicalRoulette:
 
         self._started = False
         self._finished = False
+        self._aborted = False
 
         self._current_chooser_id: str | None = None
         self._round_number = 0
@@ -129,6 +136,17 @@ class MusicalRoulette:
         return [
             player
             for player in self.session.players.values()
+            if player.status in (
+                PlayerStatus.ACTIVE,
+                PlayerStatus.DISCONNECTED,
+            )
+        ]
+
+    def _get_active_players(self):
+
+        return [
+            player
+            for player in self.session.players.values()
             if player.status == PlayerStatus.ACTIVE
         ]
 
@@ -149,16 +167,115 @@ class MusicalRoulette:
                 "The session is not running."
             )
 
+    def _update_metadata(self) -> None:
+
+        game_metadata = self.session.metadata.setdefault(
+            "musical_roulette",
+            {},
+        )
+
+        game_metadata["started"] = self._started
+        game_metadata["finished"] = self._finished
+        game_metadata["aborted"] = self._aborted
+        game_metadata["round"] = self._round_number
+        game_metadata["current_chooser_id"] = (
+            self._current_chooser_id
+        )
+
     def _choose_next_player(self) -> str | None:
 
-        remaining = self._get_remaining_players()
+        active = self._get_active_players()
 
-        if not remaining:
+        if not active:
             return None
 
-        selected = self._rng.choice(remaining)
+        selected = self._rng.choice(active)
 
         return selected.user_id
+
+    def _set_next_chooser(self) -> None:
+
+        self._current_chooser_id = self._choose_next_player()
+        self._update_metadata()
+
+    def _unregister_listener(self) -> None:
+
+        self.session_manager.remove_session_listener(
+            self.session.session_id,
+            self._on_session_event,
+        )
+
+    # =====================================================
+    # SESSION EVENTS
+    # =====================================================
+
+    async def _on_session_event(
+        self,
+        session: GameSession,
+        user_id: str,
+        event: str,
+    ) -> None:
+        """
+        React to player lifecycle changes from SessionManager.
+
+        Events:
+            disconnected
+            reconnected
+            surrendered
+            disconnect_expired
+        """
+
+        if self._finished or not self._started:
+            return
+
+        if session.session_id != self.session.session_id:
+            return
+
+        if session.status != SessionStatus.RUNNING:
+            return
+
+        player = self.session.get_player(user_id)
+
+        if player is None:
+            return
+
+        if event == "disconnected":
+
+            # A disconnected chooser cannot continue their turn.
+            # Keep them in the match during the grace period.
+            if self._current_chooser_id == user_id:
+                self._set_next_chooser()
+
+            return
+
+        if event == "reconnected":
+
+            # If nobody can currently take a turn, allow the
+            # returning player to become the next chooser.
+            if self._current_chooser_id is None:
+                self._set_next_chooser()
+
+            return
+
+        if event in ("surrendered", "disconnect_expired"):
+
+            # If the player who surrendered held the turn,
+            # transfer the turn to another active player.
+            if self._current_chooser_id == user_id:
+                self._set_next_chooser()
+
+            # Disconnected players still count as remaining.
+            # A winner is declared only when one eligible
+            # remaining player is left.
+            winner = await self._check_winner()
+
+            if winner is not None:
+                return
+
+            # If no chooser exists, try again after the
+            # remaining player state has been updated.
+            if self._current_chooser_id is None:
+                self._set_next_chooser()
 
     # =====================================================
     # COMPLETE GAME
@@ -177,7 +294,11 @@ class MusicalRoulette:
                 "The game has already finished."
             )
 
-        # Every participant must receive a final result.
+        if winner.status != PlayerStatus.ACTIVE:
+            raise MusicalRouletteError(
+                "The winner must be an active player."
+            )
+
         results = {
             player.user_id: (
                 "win"
@@ -214,13 +335,13 @@ class MusicalRoulette:
             "total_rounds": self._round_number,
         }
 
-        self.session.metadata["musical_roulette"][
-            "current_chooser_id"
-        ] = None
+        self._update_metadata()
 
         self.session.metadata["musical_roulette"][
             "finished"
         ] = True
+
+        self._unregister_listener()
 
         return self._result
 
@@ -231,7 +352,15 @@ class MusicalRoulette:
         if len(remaining) != 1:
             return None
 
-        return await self._complete_game(remaining[0])
+        winner = remaining[0]
+
+        # The last remaining player may still be disconnected.
+        # Wait for reconnect or expiry instead of declaring
+        # a winner during the grace period.
+        if winner.status != PlayerStatus.ACTIVE:
+            return None
+
+        return await self._complete_game(winner)
 
     # =====================================================
     # START GAME
@@ -250,9 +379,9 @@ class MusicalRoulette:
                 "Musical Roulette."
             )
 
-        remaining = self._get_remaining_players()
+        active = self._get_active_players()
 
-        if len(remaining) < 3:
+        if len(active) < 3:
             raise MusicalRouletteError(
                 "Musical Roulette requires at least "
                 "three active players."
@@ -264,13 +393,30 @@ class MusicalRoulette:
         self._current_chooser_id = self._choose_next_player()
 
         if self._current_chooser_id is None:
+            self._started = False
+
             raise MusicalRouletteError(
                 "Could not select the first player."
             )
 
+        try:
+            self.session_manager.add_session_listener(
+                self.session.session_id,
+                self._on_session_event,
+            )
+
+        except Exception as exc:
+            self._started = False
+            self._current_chooser_id = None
+
+            raise MusicalRouletteError(
+                f"Could not register session listener: {exc}"
+            ) from exc
+
         self.session.metadata["musical_roulette"] = {
             "started": True,
             "finished": False,
+            "aborted": False,
             "round": self._round_number,
             "current_chooser_id": self._current_chooser_id,
             "eliminations": [],
@@ -335,9 +481,18 @@ class MusicalRoulette:
                 "There is no active chooser."
             )
 
+        chooser = self._get_player(
+            self._current_chooser_id
+        )
+
+        if chooser.status != PlayerStatus.ACTIVE:
+            raise MusicalRouletteError(
+                "The current chooser is not active."
+            )
+
         return tuple(
             player
-            for player in self._get_remaining_players()
+            for player in self._get_active_players()
             if player.user_id != self._current_chooser_id
         )
 
@@ -379,7 +534,6 @@ class MusicalRoulette:
                 "The selected player is not active."
             )
 
-        # Eliminate the selected player.
         target.status = PlayerStatus.ELIMINATED
         target.result = "loss"
 
@@ -403,24 +557,14 @@ class MusicalRoulette:
             "round_number": self._round_number,
         })
 
-        # Check whether the game has a winner.
         winner = await self._check_winner()
 
         if winner is not None:
             return elimination
 
-        # Select the next chooser.
         self._round_number += 1
 
-        self._current_chooser_id = self._choose_next_player()
-
-        self.session.metadata["musical_roulette"][
-            "round"
-        ] = self._round_number
-
-        self.session.metadata["musical_roulette"][
-            "current_chooser_id"
-        ] = self._current_chooser_id
+        self._set_next_chooser()
 
         return elimination
 
@@ -441,9 +585,17 @@ class MusicalRoulette:
                 "The game has not started."
             )
 
+        if self.session.status != SessionStatus.RUNNING:
+            raise MusicalRouletteError(
+                "The session is not running."
+            )
+
         remaining = self._get_remaining_players()
 
         if len(remaining) != 1:
+            return None
+
+        if remaining[0].status != PlayerStatus.ACTIVE:
             return None
 
         return await self._complete_game(remaining[0])
@@ -452,14 +604,34 @@ class MusicalRoulette:
     # ABORT GAME
     # =====================================================
 
-    def abort(self) -> None:
+    async def abort(
+        self,
+        reason: str = "Game aborted.",
+    ) -> None:
 
         if self._finished:
             raise MusicalRouletteError(
                 "The game has already finished."
             )
 
+        if self.session.status != SessionStatus.RUNNING:
+            raise MusicalRouletteError(
+                "The session is not running."
+            )
+
+        try:
+            await self.session_manager.cancel_running(
+                session_id=self.session.session_id,
+                reason=reason,
+            )
+
+        except Exception as exc:
+            raise MusicalRouletteError(
+                f"Could not cancel the game session: {exc}"
+            ) from exc
+
         self._finished = True
+        self._aborted = True
         self._current_chooser_id = None
 
         game_metadata = self.session.metadata.setdefault(
@@ -470,6 +642,9 @@ class MusicalRoulette:
         game_metadata["aborted"] = True
         game_metadata["finished"] = True
         game_metadata["current_chooser_id"] = None
+        game_metadata["abort_reason"] = reason
+
+        self._unregister_listener()
 
     # =====================================================
     # GAME SUMMARY
@@ -481,6 +656,7 @@ class MusicalRoulette:
             "game_id": self.GAME_ID,
             "started": self._started,
             "finished": self._finished,
+            "aborted": self._aborted,
             "session_status": self.session.status.value,
             "round": self._round_number,
             "current_chooser_id": self._current_chooser_id,
@@ -489,6 +665,7 @@ class MusicalRoulette:
                 {
                     "user_id": player.user_id,
                     "username": player.username,
+                    "status": player.status.value,
                 }
                 for player in self._get_remaining_players()
             ],
