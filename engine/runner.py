@@ -1,3 +1,4 @@
+
 """
 MHN ARCADE V3 - Game Runner
 
@@ -9,6 +10,7 @@ Responsibilities:
 - Start registered multiplayer games
 - Prepare single-player games
 - Create and initialize game handlers
+- Safely roll back failed multiplayer launches
 
 This module is independent from Discord.py and database code.
 """
@@ -183,6 +185,36 @@ class GameRunner:
                 f"'{definition.game_id}': {exc}"
             ) from exc
 
+    async def _rollback_failed_launch(
+        self,
+        session: GameSession,
+        original_error: Exception,
+    ) -> None:
+        """
+        Cancel a session when its handler fails to start.
+
+        This prevents a session from remaining RUNNING
+        without a successfully initialized game handler.
+        """
+
+        if session.status != SessionStatus.RUNNING:
+            return
+
+        try:
+            await self.lobbies.sessions.cancel_running(
+                session_id=session.session_id,
+                reason=(
+                    "Game handler failed to start: "
+                    f"{original_error}"
+                ),
+            )
+
+        except Exception as rollback_error:
+            raise RunnerError(
+                "Game launch failed and session rollback "
+                f"also failed: {rollback_error}"
+            ) from original_error
+
     # =====================================================
     # CREATE MULTIPLAYER LOBBY
     # =====================================================
@@ -301,7 +333,7 @@ class GameRunner:
         )
 
         # Prepare the handler before changing the session state.
-        # This keeps the lobby open if handler creation fails.
+        # If handler creation fails, the lobby remains available.
         handler = await self._create_handler(
             definition,
             session=session,
@@ -317,10 +349,22 @@ class GameRunner:
         )
 
         # Initialize the actual game mechanics.
-        await self._start_handler(
-            definition,
-            handler,
-        )
+        try:
+            await self._start_handler(
+                definition,
+                handler,
+            )
+
+        except Exception as exc:
+            await self._rollback_failed_launch(
+                started_session,
+                exc,
+            )
+
+            raise RunnerError(
+                f"Game launch was rolled back for "
+                f"'{definition.game_id}': {exc}"
+            ) from exc
 
         return GameLaunch(
             definition=definition,
