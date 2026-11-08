@@ -4,7 +4,7 @@ MHN ARCADE V3 - Musical Roulette
 Core game mechanics for the multiplayer elimination game.
 
 This module is independent from Discord.py.
-It manages turns, eliminations, and the final winner.
+It manages turns, eliminations, and final session results.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from typing import Any
 from ..core import (
     GameSession,
     PlayerStatus,
-    SessionError,
     SessionStatus,
 )
 
@@ -70,6 +69,7 @@ class MusicalRoulette:
     - A player cannot eliminate themselves.
     - Eliminated players cannot be selected again.
     - The last remaining player wins.
+    - Final results are recorded by SessionManager.
     """
 
     GAME_ID = "musical_roulette"
@@ -77,6 +77,7 @@ class MusicalRoulette:
     def __init__(
         self,
         session: GameSession,
+        session_manager: Any,
         rng: Any = None,
     ) -> None:
 
@@ -90,7 +91,13 @@ class MusicalRoulette:
                 "The session is not a Musical Roulette game."
             )
 
+        if session_manager is None:
+            raise MusicalRouletteError(
+                "A valid SessionManager is required."
+            )
+
         self.session = session
+        self.session_manager = session_manager
         self._rng = rng or secrets.SystemRandom()
 
         self._started = False
@@ -107,6 +114,7 @@ class MusicalRoulette:
     # =====================================================
 
     def _get_player(self, user_id: str | int):
+
         player = self.session.get_player(str(user_id))
 
         if player is None:
@@ -117,6 +125,7 @@ class MusicalRoulette:
         return player
 
     def _get_remaining_players(self):
+
         return [
             player
             for player in self.session.players.values()
@@ -151,19 +160,44 @@ class MusicalRoulette:
 
         return selected.user_id
 
-    def _check_winner(self) -> RouletteResult | None:
+    # =====================================================
+    # COMPLETE GAME
+    # =====================================================
 
-        remaining = self._get_remaining_players()
+    async def _complete_game(
+        self,
+        winner,
+    ) -> RouletteResult:
 
-        if len(remaining) != 1:
-            return None
+        if self._finished:
+            if self._result is not None:
+                return self._result
 
-        winner = remaining[0]
+            raise MusicalRouletteError(
+                "The game has already finished."
+            )
 
-        winner.status = PlayerStatus.WINNER
-        winner.result = "win"
+        # Every participant must receive a final result.
+        results = {
+            player.user_id: (
+                "win"
+                if player.user_id == winner.user_id
+                else "loss"
+            )
+            for player in self.session.players.values()
+        }
 
-        self._finished = True
+        try:
+            await self.session_manager.finish(
+                session_id=self.session.session_id,
+                results=results,
+                winner_id=winner.user_id,
+            )
+
+        except Exception as exc:
+            raise MusicalRouletteError(
+                f"Could not save final game results: {exc}"
+            ) from exc
 
         self._result = RouletteResult(
             winner_id=winner.user_id,
@@ -171,13 +205,33 @@ class MusicalRoulette:
             total_rounds=self._round_number,
         )
 
+        self._finished = True
+        self._current_chooser_id = None
+
         self.session.metadata["musical_roulette_result"] = {
             "winner_id": winner.user_id,
             "winner_name": winner.username,
             "total_rounds": self._round_number,
         }
 
+        self.session.metadata["musical_roulette"][
+            "current_chooser_id"
+        ] = None
+
+        self.session.metadata["musical_roulette"][
+            "finished"
+        ] = True
+
         return self._result
+
+    async def _check_winner(self) -> RouletteResult | None:
+
+        remaining = self._get_remaining_players()
+
+        if len(remaining) != 1:
+            return None
+
+        return await self._complete_game(remaining[0])
 
     # =====================================================
     # START GAME
@@ -216,6 +270,7 @@ class MusicalRoulette:
 
         self.session.metadata["musical_roulette"] = {
             "started": True,
+            "finished": False,
             "round": self._round_number,
             "current_chooser_id": self._current_chooser_id,
             "eliminations": [],
@@ -229,6 +284,7 @@ class MusicalRoulette:
 
     @property
     def current_chooser_id(self) -> str | None:
+
         return self._current_chooser_id
 
     @property
@@ -243,22 +299,27 @@ class MusicalRoulette:
 
     @property
     def round_number(self) -> int:
+
         return self._round_number
 
     @property
     def is_finished(self) -> bool:
+
         return self._finished
 
     @property
     def result(self) -> RouletteResult | None:
+
         return self._result
 
     @property
     def eliminations(self) -> tuple[Elimination, ...]:
+
         return tuple(self._eliminations)
 
     @property
     def remaining_players(self):
+
         return tuple(self._get_remaining_players())
 
     # =====================================================
@@ -284,7 +345,7 @@ class MusicalRoulette:
     # ELIMINATE PLAYER
     # =====================================================
 
-    def eliminate(
+    async def eliminate(
         self,
         chooser_id: str | int,
         target_id: str | int,
@@ -318,6 +379,7 @@ class MusicalRoulette:
                 "The selected player is not active."
             )
 
+        # Eliminate the selected player.
         target.status = PlayerStatus.ELIMINATED
         target.result = "loss"
 
@@ -341,19 +403,13 @@ class MusicalRoulette:
             "round_number": self._round_number,
         })
 
-        # Check whether only one player remains.
-        winner = self._check_winner()
+        # Check whether the game has a winner.
+        winner = await self._check_winner()
 
         if winner is not None:
-            self._current_chooser_id = None
-
-            self.session.metadata["musical_roulette"][
-                "current_chooser_id"
-            ] = None
-
             return elimination
 
-        # Select the next chooser from remaining players.
+        # Select the next chooser.
         self._round_number += 1
 
         self._current_chooser_id = self._choose_next_player()
@@ -369,6 +425,30 @@ class MusicalRoulette:
         return elimination
 
     # =====================================================
+    # RETRY FINALIZATION
+    # =====================================================
+
+    async def finalize(self) -> RouletteResult | None:
+        """
+        Retry finalization if saving results previously failed.
+        """
+
+        if self._finished:
+            return self._result
+
+        if not self._started:
+            raise MusicalRouletteError(
+                "The game has not started."
+            )
+
+        remaining = self._get_remaining_players()
+
+        if len(remaining) != 1:
+            return None
+
+        return await self._complete_game(remaining[0])
+
+    # =====================================================
     # ABORT GAME
     # =====================================================
 
@@ -382,9 +462,14 @@ class MusicalRoulette:
         self._finished = True
         self._current_chooser_id = None
 
-        self.session.metadata["musical_roulette"][
-            "aborted"
-        ] = True
+        game_metadata = self.session.metadata.setdefault(
+            "musical_roulette",
+            {},
+        )
+
+        game_metadata["aborted"] = True
+        game_metadata["finished"] = True
+        game_metadata["current_chooser_id"] = None
 
     # =====================================================
     # GAME SUMMARY
@@ -396,8 +481,10 @@ class MusicalRoulette:
             "game_id": self.GAME_ID,
             "started": self._started,
             "finished": self._finished,
+            "session_status": self.session.status.value,
             "round": self._round_number,
             "current_chooser_id": self._current_chooser_id,
+
             "remaining_players": [
                 {
                     "user_id": player.user_id,
@@ -405,6 +492,7 @@ class MusicalRoulette:
                 }
                 for player in self._get_remaining_players()
             ],
+
             "eliminations": [
                 {
                     "eliminated_id": item.eliminated_id,
@@ -415,6 +503,7 @@ class MusicalRoulette:
                 }
                 for item in self._eliminations
             ],
+
             "winner": (
                 {
                     "user_id": self._result.winner_id,
