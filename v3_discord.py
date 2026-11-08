@@ -864,6 +864,7 @@ class MusicalRouletteGameView(discord.ui.View):
             )
 
             if self.handler.is_finished:
+                self.superseded = True
                 await interaction.response.edit_message(
                     embed=build_roulette_game_embed(
                         self.handler,
