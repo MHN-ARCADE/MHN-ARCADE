@@ -1,4 +1,3 @@
-
 """
 MHN ARCADE V3 - Core Engine
 
@@ -12,8 +11,7 @@ Handles:
 - Disconnect and reconnect grace period
 - Session lifecycle notifications
 - Match results and cancellation
-
-This module does not contain Discord UI or database code.
+- Optional SQLite persistence
 """
 
 from __future__ import annotations
@@ -24,8 +22,9 @@ import secrets
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Any, Callable, Mapping
+
+from .repository import SQLiteSessionRepository
 
 
 # =========================================================
@@ -146,15 +145,25 @@ class SessionManager:
         disconnect_expired
 
     Callbacks may be synchronous or asynchronous.
+
+    Persistence:
+        - SQLite storage is optional.
+        - Only lobby sessions are restored after restart.
+        - Running matches are not resumed automatically.
     """
 
     VALID_RESULTS = {"win", "loss", "draw"}
 
-    def __init__(self, disconnect_grace_seconds: int = 30):
+    def __init__(
+        self,
+        disconnect_grace_seconds: int = 30,
+        repository: SQLiteSessionRepository | None = None,
+    ):
         if disconnect_grace_seconds < 0:
             raise ValueError("Disconnect grace period cannot be negative.")
 
         self.disconnect_grace_seconds = disconnect_grace_seconds
+        self.repository = repository
 
         self._sessions: dict[str, GameSession] = {}
 
@@ -171,6 +180,250 @@ class SessionManager:
         ] = {}
 
         self._lock = asyncio.Lock()
+
+    # =====================================================
+    # SERIALIZATION
+    # =====================================================
+
+    @staticmethod
+    def _datetime_to_string(
+        value: datetime | None,
+    ) -> str | None:
+        if value is None:
+            return None
+
+        return value.isoformat()
+
+    @staticmethod
+    def _string_to_datetime(
+        value: str | None,
+    ) -> datetime | None:
+        if value is None:
+            return None
+
+        return datetime.fromisoformat(value)
+
+    @classmethod
+    def _serialize_session(
+        cls,
+        session: GameSession,
+    ) -> dict[str, Any]:
+
+        return {
+            "session_id": session.session_id,
+            "guild_id": session.guild_id,
+            "game_id": session.game_id,
+            "host_id": session.host_id,
+            "min_players": session.min_players,
+            "max_players": session.max_players,
+            "status": session.status.value,
+            "metadata": dict(session.metadata),
+            "created_at": cls._datetime_to_string(
+                session.created_at
+            ),
+            "started_at": cls._datetime_to_string(
+                session.started_at
+            ),
+            "finished_at": cls._datetime_to_string(
+                session.finished_at
+            ),
+            "players": {
+                user_id: {
+                    "user_id": player.user_id,
+                    "username": player.username,
+                    "status": player.status.value,
+                    "joined_at": cls._datetime_to_string(
+                        player.joined_at
+                    ),
+                    "disconnected_at": cls._datetime_to_string(
+                        player.disconnected_at
+                    ),
+                    "result": player.result,
+                }
+                for user_id, player in session.players.items()
+            },
+        }
+
+    @classmethod
+    def _deserialize_session(
+        cls,
+        data: Mapping[str, Any],
+    ) -> GameSession:
+
+        players_data = data.get("players", {})
+
+        if not isinstance(players_data, Mapping):
+            raise ValueError("Invalid session players data.")
+
+        players: dict[str, SessionPlayer] = {}
+
+        for user_id, player_data in players_data.items():
+            if not isinstance(player_data, Mapping):
+                raise ValueError("Invalid player data.")
+
+            normalized_user_id = str(user_id)
+
+            players[normalized_user_id] = SessionPlayer(
+                user_id=str(
+                    player_data.get("user_id", normalized_user_id)
+                ),
+                username=str(player_data["username"]),
+                status=PlayerStatus(
+                    player_data.get(
+                        "status",
+                        PlayerStatus.ACTIVE.value,
+                    )
+                ),
+                joined_at=(
+                    cls._string_to_datetime(
+                        player_data.get("joined_at")
+                    )
+                    or datetime.now(timezone.utc)
+                ),
+                disconnected_at=cls._string_to_datetime(
+                    player_data.get("disconnected_at")
+                ),
+                result=player_data.get("result"),
+            )
+
+        return GameSession(
+            session_id=str(data["session_id"]),
+            guild_id=str(data["guild_id"]),
+            game_id=str(data["game_id"]),
+            host_id=str(data["host_id"]),
+            min_players=int(data["min_players"]),
+            max_players=int(data["max_players"]),
+            status=SessionStatus(data["status"]),
+            players=players,
+            metadata=dict(data.get("metadata") or {}),
+            created_at=(
+                cls._string_to_datetime(data.get("created_at"))
+                or datetime.now(timezone.utc)
+            ),
+            started_at=cls._string_to_datetime(
+                data.get("started_at")
+            ),
+            finished_at=cls._string_to_datetime(
+                data.get("finished_at")
+            ),
+        )
+
+    async def _persist_session_unlocked(
+        self,
+        session: GameSession,
+    ) -> None:
+        """
+        Persist a session while the manager lock is held.
+
+        Keeping the write ordered with state changes prevents
+        concurrent operations from saving stale snapshots.
+        """
+
+        if self.repository is None:
+            return
+
+        await self.repository.save_session(
+            self._serialize_session(session)
+        )
+
+    async def _delete_persisted_session_unlocked(
+        self,
+        session_id: str,
+    ) -> None:
+
+        if self.repository is None:
+            return
+
+        await self.repository.delete_session(session_id)
+
+    # =====================================================
+    # INITIALIZATION AND RECOVERY
+    # =====================================================
+
+    async def initialize(self) -> None:
+        """
+        Initialize SQLite storage and restore recoverable lobbies.
+
+        Running, completed and cancelled sessions are not restored.
+        Running matches require game-specific state recovery, which
+        is intentionally not implemented here.
+        """
+
+        if self.repository is None:
+            return
+
+        await self.repository.initialize()
+
+        stored_sessions = await self.repository.load_sessions()
+
+        async with self._lock:
+            self._sessions.clear()
+            self._user_sessions.clear()
+            self._disconnect_tasks.clear()
+            self._session_listeners.clear()
+
+            for stored_data in stored_sessions:
+                session_id = str(
+                    stored_data.get("session_id", "")
+                )
+
+                try:
+                    session = self._deserialize_session(
+                        stored_data
+                    )
+                except (
+                    KeyError,
+                    TypeError,
+                    ValueError,
+                ):
+                    if session_id:
+                        await self._delete_persisted_session_unlocked(
+                            session_id
+                        )
+                    continue
+
+                if session.status != SessionStatus.LOBBY:
+                    await self._delete_persisted_session_unlocked(
+                        session.session_id
+                    )
+                    continue
+
+                if not session.players:
+                    await self._delete_persisted_session_unlocked(
+                        session.session_id
+                    )
+                    continue
+
+                if session.host_id not in session.players:
+                    await self._delete_persisted_session_unlocked(
+                        session.session_id
+                    )
+                    continue
+
+                if len(session.players) > session.max_players:
+                    await self._delete_persisted_session_unlocked(
+                        session.session_id
+                    )
+                    continue
+
+                conflicting_user = any(
+                    (session.guild_id, user_id)
+                    in self._user_sessions
+                    for user_id in session.players
+                )
+
+                if conflicting_user:
+                    await self._delete_persisted_session_unlocked(
+                        session.session_id
+                    )
+                    continue
+
+                self._sessions[session.session_id] = session
+
+                for user_id in session.players:
+                    self._user_sessions[
+                        (session.guild_id, user_id)
+                    ] = session.session_id
 
     # =====================================================
     # INTERNAL HELPERS
@@ -198,6 +451,7 @@ class SessionManager:
         session_id: str,
         user_id: str,
     ) -> None:
+
         key = (session_id, user_id)
         task = self._disconnect_tasks.pop(key, None)
 
@@ -208,6 +462,7 @@ class SessionManager:
         self,
         session: GameSession,
     ) -> None:
+
         for user_id in list(session.players):
             key = (session.guild_id, user_id)
 
@@ -250,7 +505,6 @@ class SessionManager:
                     await result
 
             except Exception:
-                # A game listener must not break the session manager.
                 continue
 
     # =====================================================
@@ -262,6 +516,7 @@ class SessionManager:
         session_id: str,
         callback: Callable[[GameSession, str, str], Any],
     ) -> None:
+
         if not callable(callback):
             raise SessionError("Session listener must be callable.")
 
@@ -280,6 +535,7 @@ class SessionManager:
         session_id: str,
         callback: Callable[[GameSession, str, str], Any],
     ) -> None:
+
         session_id = str(session_id)
 
         listeners = self._session_listeners.get(session_id)
@@ -352,6 +608,8 @@ class SessionManager:
             self._sessions[session_id] = session
             self._user_sessions[user_key] = session_id
 
+            await self._persist_session_unlocked(session)
+
             return session
 
     # =====================================================
@@ -392,6 +650,8 @@ class SessionManager:
             )
 
             self._user_sessions[user_key] = session.session_id
+
+            await self._persist_session_unlocked(session)
 
             return session
 
@@ -435,6 +695,14 @@ class SessionManager:
                             None,
                         )
 
+                        await self._delete_persisted_session_unlocked(
+                            session.session_id
+                        )
+
+                        return session
+
+                await self._persist_session_unlocked(session)
+
                 return session
 
             if session.status == SessionStatus.RUNNING:
@@ -452,7 +720,10 @@ class SessionManager:
 
                     notify_surrender = True
 
+                await self._persist_session_unlocked(session)
+
                 result_session = session
+
             else:
                 raise SessionError("This session is no longer active.")
 
@@ -492,6 +763,8 @@ class SessionManager:
 
             session.status = SessionStatus.RUNNING
             session.started_at = datetime.now(timezone.utc)
+
+            await self._persist_session_unlocked(session)
 
             return session
 
@@ -533,6 +806,8 @@ class SessionManager:
                 session.session_id,
                 user_id,
             )
+
+            await self._persist_session_unlocked(session)
 
             task = asyncio.create_task(
                 self._expire_disconnect(
@@ -609,6 +884,8 @@ class SessionManager:
                 event = "reconnected"
                 reconnected = True
 
+            await self._persist_session_unlocked(session)
+
         if event is not None:
             await self._notify_session_listeners(
                 session.session_id,
@@ -653,6 +930,8 @@ class SessionManager:
                     player.status = PlayerStatus.SURRENDERED
                     player.disconnected_at = None
                     expired = True
+
+                    await self._persist_session_unlocked(session)
 
             if expired:
                 await self._notify_session_listeners(
@@ -741,6 +1020,8 @@ class SessionManager:
 
             self._remove_session_indexes_unlocked(session)
 
+            await self._persist_session_unlocked(session)
+
             return session
 
     # =====================================================
@@ -768,6 +1049,8 @@ class SessionManager:
                 session.metadata["cancellation_reason"] = str(reason)
 
             self._remove_session_indexes_unlocked(session)
+
+            await self._persist_session_unlocked(session)
 
             return session
 
@@ -798,6 +1081,10 @@ class SessionManager:
 
             self._remove_session_indexes_unlocked(session)
             self._sessions.pop(session.session_id, None)
+
+            await self._delete_persisted_session_unlocked(
+                session.session_id
+            )
 
             return session
 
