@@ -81,6 +81,7 @@ DEFAULT_GAMES: tuple[GameDefinition, ...] = (
         description_en="A simple heads or tails game.",
         description_ar="لعبة بسيطة لاختيار الصورة أو الكتابة.",
         tags=("classic", "quick", "single-player"),
+        handler_factory=create_coin_flip_handler,
     ),
 
     # -----------------------------------------------------
