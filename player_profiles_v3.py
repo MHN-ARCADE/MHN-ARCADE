@@ -13,7 +13,9 @@ SUPPORTED_PROFILE_LANGUAGES = ("ar", "en")
 
 def initialize_player_profiles():
     """Create the V3 profile table safely; existing V2 data is untouched."""
+
     with get_connection() as db:
+
         db.execute(
             """
             CREATE TABLE IF NOT EXISTS player_profiles (
@@ -28,6 +30,7 @@ def initialize_player_profiles():
             )
             """
         )
+
         db.execute(
             """
             CREATE INDEX IF NOT EXISTS player_profiles_character_idx
@@ -38,7 +41,9 @@ def initialize_player_profiles():
 
 def get_player_profile(guild_id, user_id):
     """Return the saved V3 profile row, or None."""
+
     with get_connection() as db:
+
         return db.execute(
             """
             SELECT guild_id, user_id, profile_language, character_id,
@@ -55,28 +60,41 @@ def save_player_profile(guild_id, user_id, language, character_id):
     Create or update a profile after the user completes onboarding.
     This never changes V2 language/progress or the selected V2 character.
     """
+
     language = str(language).strip().lower()
     character_id = str(character_id).strip().lower()
 
     if language not in SUPPORTED_PROFILE_LANGUAGES:
         raise ValueError("Profile language must be 'ar' or 'en'.")
+
     if not character_id:
         raise ValueError("character_id cannot be empty.")
 
     with get_connection() as db:
+
         db.execute(
             """
             INSERT INTO player_profiles (
-                guild_id, user_id, profile_language, character_id
+                guild_id,
+                user_id,
+                profile_language,
+                character_id
             )
             VALUES (?, ?, ?, ?)
+
             ON CONFLICT(guild_id, user_id) DO UPDATE SET
                 profile_language = excluded.profile_language,
                 character_id = excluded.character_id,
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (str(guild_id), str(user_id), language, character_id),
+            (
+                str(guild_id),
+                str(user_id),
+                language,
+                character_id
+            ),
         )
+
         return db.execute(
             """
             SELECT guild_id, user_id, profile_language, character_id,
@@ -90,7 +108,9 @@ def save_player_profile(guild_id, user_id, language, character_id):
 
 def delete_player_profile(guild_id, user_id):
     """Delete only the V3 profile row; V2 progress is not touched."""
+
     with get_connection() as db:
+
         cursor = db.execute(
             """
             DELETE FROM player_profiles
@@ -98,4 +118,5 @@ def delete_player_profile(guild_id, user_id):
             """,
             (str(guild_id), str(user_id)),
         )
+
         return cursor.rowcount > 0
