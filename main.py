@@ -60,6 +60,12 @@ from database import (
     xp_required_for_next_level,
 )
 
+from player_profiles_v3 import initialize_player_profiles
+
+from player_cards_v3 import (
+    PlayerCardPanelView as V3PlayerCardPanelView
+)
+
 from characters import (
     CHARACTERS,
     CATEGORY_ANIME,
@@ -124,8 +130,11 @@ class MHNArcadeBot(commands.Bot):
 
         initialize_database()
 
-        # Persistent player card button.
-        self.add_view(PlayerCardPanelView())
+        # Initialize the separate V3 player profile storage.
+        initialize_player_profiles()
+
+        # Register the new persistent V3 player card panel.
+        self.add_view(V3PlayerCardPanelView())
 
         # Load the V2 arcade games engine.
         await self.load_extension("games")
@@ -1394,7 +1403,7 @@ async def initialize_arcade_systems(guild):
         "player_card_panel",
         PLAYER_CARDS_CHANNEL_ID,
         panel,
-        view=PlayerCardPanelView()
+        view=V3PlayerCardPanelView()
     )
 
     # Persistent rank guide in the achievements channel.
