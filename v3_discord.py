@@ -20,7 +20,7 @@ from engine.i18n import resolve_language, t
 
 
 logger = logging.getLogger("mhn.arcade.v3.discord")
-
+ACHIEVEMENTS_CHANNEL_ID = 1567722630969303090
 PURPLE = 0x7C3AED
 GAMES_PER_PAGE = 4
 DESCRIPTION_LIMIT = 550
