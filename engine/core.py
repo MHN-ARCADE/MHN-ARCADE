@@ -551,7 +551,17 @@ class SessionManager:
 
         if not listeners:
             self._session_listeners.pop(session_id, None)
+    def add_completion_listener(
+        self,
+        callback: Callable[[GameSession], Any],
+    ) -> None:
 
+        if not callable(callback):
+            raise SessionError(
+                "Completion listener must be callable."
+            )
+
+        self._completion_listeners.add(callback)
     # =====================================================
     # CREATE SESSION
     # =====================================================
