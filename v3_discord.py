@@ -930,6 +930,7 @@ class V3Games(commands.Cog):
         self.runtime.achievement_announcement_callback = (
             self._announce_achievements
         )
+        
     async def _announce_achievements(
         self,
         unlocked: list[dict[str, str]],
