@@ -930,7 +930,70 @@ class V3Games(commands.Cog):
         self.runtime.achievement_announcement_callback = (
             self._announce_achievements
         )
-        
+    async def _announce_achievements(
+        self,
+        unlocked: list[dict[str, str]],
+    ) -> None:
+
+        channel = self.bot.get_channel(
+            ACHIEVEMENTS_CHANNEL_ID
+        )
+
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(
+                    ACHIEVEMENTS_CHANNEL_ID
+                )
+            except discord.HTTPException:
+                logger.exception(
+                    "Could not find the V3 achievements channel."
+                )
+                return
+
+        for item in unlocked:
+            user_id = item["user_id"]
+            username = item["username"]
+
+            name_ar = item["name_ar"]
+            name_en = item["name_en"]
+
+            description_ar = item["description_ar"]
+            description_en = item["description_en"]
+
+            rarity = item["rarity"]
+
+            message = (
+                "🏆 **MHN ARCADE V3 — ACHIEVEMENT UNLOCKED!**\n\n"
+                f"👤 Player: <@{user_id}> (`{username}`)\n"
+                f"💎 **{name_en}**\n"
+                f"📝 {description_en}\n"
+                f"⭐ Rarity: **{rarity}**\n\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "🏆 **تم فتح إنجاز جديد!**\n\n"
+                f"👤 اللاعب: <@{user_id}>\n"
+                f"💎 **{name_ar}**\n"
+                f"📝 {description_ar}\n"
+                f"⭐ الندرة: **{rarity}**\n\n"
+                "🔥 Keep playing. Your legacy starts here!\n"
+                "🔥 استمر باللعب، إنجازاتك تصنع تاريخك!"
+            )
+
+            try:
+                await channel.send(
+                    message,
+                    allowed_mentions=discord.AllowedMentions(
+                        users=True,
+                        roles=False,
+                        everyone=False,
+                    ),
+                )
+            except discord.HTTPException:
+                logger.exception(
+                    "Failed to announce achievement %s for player %s.",
+                    item["achievement_id"],
+                    user_id,
+                )
+                
     @app_commands.command(
         name="arcade_v3",
         description="Open the MHN ARCADE V3 game catalog.",
