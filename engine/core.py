@@ -1038,8 +1038,18 @@ class SessionManager:
 
             await self._persist_session_unlocked(session)
 
-            return session
+        for callback in tuple(self._completion_listeners):
+            try:
+                result = callback(session)
 
+                if inspect.isawaitable(result):
+                    await result
+
+            except Exception:
+                continue
+
+        return session
+        
     # =====================================================
     # CANCEL RUNNING SESSION
     # =====================================================
