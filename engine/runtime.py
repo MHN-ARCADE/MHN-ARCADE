@@ -3,24 +3,19 @@
 MHN ARCADE V3 - Runtime
 
 Central runtime for the V3 game engine.
-
-Responsibilities:
-- Create isolated V3 SQLite storage
-- Initialize and recover lobby sessions
-- Build the game registry
-- Connect sessions, lobbies, and game runner
-- Provide a clean shutdown lifecycle
-
-This module does not modify or start the V2 engine.
+V3 achievements use the same isolated V3 database.
+V2 remains completely independent.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+from .achievements import V3AchievementManager
 from .catalog import build_default_registry
 from .core import SessionManager
 from .lobby import LobbyManager
@@ -29,18 +24,15 @@ from .repository import SQLiteSessionRepository
 from .runner import GameRunner
 
 
+logger = logging.getLogger("mhn.arcade.v3.runtime")
+
+
 class RuntimeError(Exception):
     """Raised when the V3 runtime cannot be initialized."""
 
 
 class V3Runtime:
-    """
-    Central runtime for MHN ARCADE V3.
-
-    Create one runtime instance for the application.
-    Initialize it during application startup and shut it
-    down when the application stops.
-    """
+    """Central runtime for MHN ARCADE V3."""
 
     def __init__(
         self,
@@ -57,8 +49,20 @@ class V3Runtime:
             db_path=selected_db_path
         )
 
+        self.achievements = V3AchievementManager(
+            db_path=self.repository.db_path
+        )
+
+        self.achievement_announcement_callback: (
+            Callable[[list[dict[str, str]]], Any] | None
+        ) = None
+
         self.sessions = SessionManager(
             repository=self.repository
+        )
+
+        self.sessions.add_completion_listener(
+            self._on_session_completed
         )
 
         self.lobbies = LobbyManager(
@@ -77,16 +81,35 @@ class V3Runtime:
 
     @property
     def initialized(self) -> bool:
-        """Return whether the runtime is ready."""
         return self._initialized and not self._closed
 
-    async def initialize(self) -> "V3Runtime":
-        """
-        Initialize database storage and restore recoverable
-        lobby sessions.
+    async def _on_session_completed(self, session: Any) -> None:
+        """Process completed games through the V3 achievement engine."""
 
-        Safe to call more than once on the same runtime instance.
-        """
+        try:
+            unlocked = await self.achievements.record_completed_game(
+                session
+            )
+
+            if not unlocked:
+                return
+
+            callback = self.achievement_announcement_callback
+
+            if callable(callback):
+                result = callback(unlocked)
+
+                if hasattr(result, "__await__"):
+                    await result
+
+        except Exception:
+            logger.exception(
+                "V3 achievement processing failed for session %s",
+                getattr(session, "session_id", "unknown"),
+            )
+
+    async def initialize(self) -> "V3Runtime":
+        """Initialize V3 storage and recover pending completed results."""
 
         if self._closed:
             raise RuntimeError(
@@ -97,6 +120,30 @@ class V3Runtime:
             return self
 
         try:
+            await self.achievements.initialize()
+
+            # Recover completed sessions in case the process stopped
+            # after saving a result but before updating achievements.
+            stored_sessions = await self.repository.load_sessions()
+
+            for stored_data in stored_sessions:
+                if stored_data.get("status") != "completed":
+                    continue
+
+                try:
+                    session = SessionManager._deserialize_session(
+                        stored_data
+                    )
+
+                    await self.achievements.record_completed_game(
+                        session
+                    )
+
+                except Exception:
+                    logger.exception(
+                        "Could not recover V3 achievement result."
+                    )
+
             await self.sessions.initialize()
 
         except Exception as exc:
@@ -105,31 +152,25 @@ class V3Runtime:
             ) from exc
 
         self._initialized = True
-
         return self
 
     def require_initialized(self) -> None:
-        """Ensure the runtime is ready before game operations."""
-
         if not self.initialized:
             raise RuntimeError(
                 "V3 runtime has not been initialized."
             )
 
     def get_status(self) -> dict[str, Any]:
-        """Return a basic runtime status snapshot."""
-
         return {
             "initialized": self.initialized,
             "closed": self._closed,
             "registered_games": self.registry.count,
             "game_ids": list(self.registry.game_ids),
             "database": str(self.repository.db_path),
+            "achievements_enabled": self.initialized,
         }
 
     async def shutdown(self) -> None:
-        """Stop background session tasks and close the runtime."""
-
         if self._closed:
             return
 
@@ -142,12 +183,7 @@ class V3Runtime:
 async def create_v3_runtime(
     db_path: str | Path | None = None,
 ) -> V3Runtime:
-    """
-    Create and initialize a ready-to-use V3 runtime.
-
-    Example:
-        runtime = await create_v3_runtime()
-    """
+    """Create and initialize a ready-to-use V3 runtime."""
 
     runtime = V3Runtime(db_path=db_path)
 
