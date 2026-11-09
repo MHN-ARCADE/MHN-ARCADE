@@ -927,7 +927,10 @@ class V3Games(commands.Cog):
 
         self.bot = bot
         self.runtime = runtime
-
+        self.runtime.achievement_announcement_callback = (
+            self._announce_achievements
+        )
+        
     @app_commands.command(
         name="arcade_v3",
         description="Open the MHN ARCADE V3 game catalog.",
