@@ -179,7 +179,10 @@ class SessionManager:
             str,
             set[Callable[[GameSession, str, str], Any]],
         ] = {}
-
+        
+        self._completion_listeners: set[
+            Callable[[GameSession], Any]
+        ] = set()
         self._lock = asyncio.Lock()
 
     # =====================================================
