@@ -1,9 +1,4 @@
-"""MHN ARCADE V3 - bilingual, private player-card workflow.
-
-The public panel is persistent. All onboarding and card views are ephemeral.
-A newly created card is announced publicly for 15 minutes, then only the
-public Discord message is deleted; the saved profile remains in SQLite.
-"""
+"""MHN ARCADE V3 - bilingual player-card workflow."""
 
 from __future__ import annotations
 
@@ -67,6 +62,7 @@ def build_player_card_embed(
 
     language = profile["profile_language"]
     user_id = member.id
+
     progress = get_progress(guild.id, user_id, language)
 
     if progress is None:
@@ -79,10 +75,17 @@ def build_player_card_embed(
     level = int(progress["level"])
     xp = int(progress["xp"])
     next_xp = xp_required_for_next_level(level)
+
     games = int(progress["games_played"])
     wins = int(progress["wins"])
     win_rate = (wins / games * 100) if games else 0.0
-    achievements = get_achievement_count(guild.id, user_id, language)
+
+    achievements = get_achievement_count(
+        guild.id,
+        user_id,
+        language
+    )
+
     wallet = get_wallet(guild.id, user_id)
 
     selected = get_selected_character(guild.id, user_id)
@@ -105,6 +108,7 @@ def build_player_card_embed(
     bar = "🟪" * filled + "⬛" * (10 - filled)
 
     if language == "ar":
+
         embed = discord.Embed(
             title="💜 بطاقة اللاعب",
             description=(
@@ -131,6 +135,7 @@ def build_player_card_embed(
         ]
 
     else:
+
         embed = discord.Embed(
             title="💜 Player Card",
             description=(
@@ -189,8 +194,58 @@ async def _send_private_error(
         )
 
 
+async def publish_temporary_player_card(
+    guild: discord.Guild,
+    member: discord.abc.User,
+    profile
+) -> bool:
+
+    embed = build_player_card_embed(
+        guild,
+        member,
+        profile,
+        public=True
+    )
+
+    try:
+        channel = guild.get_channel(PLAYER_CARDS_CHANNEL_ID)
+
+        if channel is None:
+            channel = await guild.fetch_channel(
+                PLAYER_CARDS_CHANNEL_ID
+            )
+
+        public_message = await channel.send(embed=embed)
+
+    except (discord.Forbidden, discord.HTTPException, AttributeError):
+        logger.exception(
+            "Could not publish temporary player card for %s",
+            member.id
+        )
+        return False
+
+    async def remove_public_card():
+
+        await asyncio.sleep(PUBLIC_CARD_SECONDS)
+
+        try:
+            await public_message.delete()
+
+        except discord.NotFound:
+            pass
+
+        except (discord.Forbidden, discord.HTTPException):
+            logger.exception(
+                "Could not remove temporary public card for %s",
+                member.id
+            )
+
+    asyncio.create_task(remove_public_card())
+
+    return True
+
+
 class PlayerCardPanelView(discord.ui.View):
-    """Persistent public entry point; individual actions stay private."""
 
     def __init__(self):
         super().__init__(timeout=None)
@@ -226,17 +281,6 @@ class PlayerCardPanelView(discord.ui.View):
         )
 
         if profile:
-            title = (
-                "بطاقتك جاهزة 💜"
-                if language == "ar"
-                else "Your player card is ready 💜"
-            )
-
-            description = (
-                "اختر عرض بطاقة اللاعب."
-                if language == "ar"
-                else "Choose to view your player card."
-            )
 
             view = ExistingPlayerCardView(
                 interaction.user.id,
@@ -244,16 +288,17 @@ class PlayerCardPanelView(discord.ui.View):
             )
 
             await interaction.response.send_message(
-                embed=discord.Embed(
-                    title=title,
-                    description=description,
-                    color=PURPLE
+                content=(
+                    "اختر الإجراء المطلوب:"
+                    if language == "ar"
+                    else "Choose an action:"
                 ),
                 view=view,
                 ephemeral=True,
             )
 
         else:
+
             embed = discord.Embed(
                 title="🎮 بطاقة اللاعب | Player Card",
                 description=(
@@ -275,25 +320,37 @@ class PlayerCardPanelView(discord.ui.View):
 class ExistingPlayerCardView(discord.ui.View):
 
     def __init__(self, owner_id: int, language: str):
+
         super().__init__(timeout=180)
 
         self.owner_id = owner_id
         self.language = language
 
-        label = (
-            "عرض بطاقة اللاعب"
-            if language == "ar"
-            else "View Player Card"
-        )
-
-        button = discord.ui.Button(
-            label=label,
+        view_button = discord.ui.Button(
+            label=(
+                "عرض بطاقة اللاعب"
+                if language == "ar"
+                else "View Player Card"
+            ),
             emoji="👤",
             style=discord.ButtonStyle.success
         )
 
-        button.callback = self.show_card
-        self.add_item(button)
+        change_button = discord.ui.Button(
+            label=(
+                "تغيير الشخصية"
+                if language == "ar"
+                else "Change Character"
+            ),
+            emoji="🎭",
+            style=discord.ButtonStyle.primary
+        )
+
+        view_button.callback = self.show_card
+        change_button.callback = self.change_character
+
+        self.add_item(view_button)
+        self.add_item(change_button)
 
     async def interaction_check(
         self,
@@ -301,12 +358,14 @@ class ExistingPlayerCardView(discord.ui.View):
     ) -> bool:
 
         if interaction.user.id != self.owner_id:
+
             await _send_private_error(
                 interaction,
                 "هذه القائمة ليست لك."
                 if self.language == "ar"
                 else "This menu is not yours."
             )
+
             return False
 
         return True
@@ -319,29 +378,78 @@ class ExistingPlayerCardView(discord.ui.View):
         )
 
         if profile is None:
+
             await _send_private_error(
                 interaction,
                 "لم تعد بطاقتك موجودة."
                 if self.language == "ar"
                 else "Your profile no longer exists."
             )
+
             return
 
-        embed = build_player_card_embed(
+        published = await publish_temporary_player_card(
             interaction.guild,
             interaction.user,
             profile
         )
 
+        if self.language == "ar":
+
+            message = (
+                "💜 تم نشر بطاقة لاعبك للعامة لمدة 15 دقيقة."
+                if published
+                else "تعذر نشر البطاقة الآن، حاول مرة ثانية."
+            )
+
+        else:
+
+            message = (
+                "💜 Your player card is now public for 15 minutes."
+                if published
+                else "Could not publish your card right now. Please try again."
+            )
+
         await interaction.response.send_message(
-            embed=embed,
+            content=message,
             ephemeral=True
+        )
+
+    async def change_character(self, interaction: discord.Interaction):
+
+        view = CharacterCategoryView(
+            self.owner_id,
+            self.language,
+            mode="change"
+        )
+
+        title = (
+            "اختر تصنيف الشخصية الجديدة"
+            if self.language == "ar"
+            else "Choose your new character category"
+        )
+
+        description = (
+            "اختر من الأنمي أو نتفلكس."
+            if self.language == "ar"
+            else "Choose Anime or Netflix."
+        )
+
+        await interaction.response.edit_message(
+            content=None,
+            embed=discord.Embed(
+                title=f"🎭 {title}",
+                description=description,
+                color=PURPLE
+            ),
+            view=view
         )
 
 
 class NewPlayerCardView(discord.ui.View):
 
     def __init__(self, owner_id: int):
+
         super().__init__(timeout=180)
 
         self.owner_id = owner_id
@@ -355,12 +463,14 @@ class NewPlayerCardView(discord.ui.View):
     ) -> bool:
 
         if interaction.user.id != self.owner_id:
+
             await _send_private_error(
                 interaction,
                 "هذه القائمة ليست لك."
                 if interaction.locale.value.startswith("ar")
                 else "This menu is not yours."
             )
+
             return False
 
         return True
@@ -410,18 +520,25 @@ class LanguageButton(discord.ui.Button):
 
 class CharacterCategoryView(discord.ui.View):
 
-    def __init__(self, owner_id: int, language: str):
+    def __init__(
+        self,
+        owner_id: int,
+        language: str,
+        mode: str = "create"
+    ):
 
         super().__init__(timeout=180)
 
         self.owner_id = owner_id
         self.language = language
+        self.mode = mode
 
         self.add_item(
             CharacterCategoryButton(
                 owner_id,
                 language,
-                CATEGORY_ANIME
+                CATEGORY_ANIME,
+                mode
             )
         )
 
@@ -429,7 +546,8 @@ class CharacterCategoryView(discord.ui.View):
             CharacterCategoryButton(
                 owner_id,
                 language,
-                CATEGORY_NETFLIX
+                CATEGORY_NETFLIX,
+                mode
             )
         )
 
@@ -439,12 +557,14 @@ class CharacterCategoryView(discord.ui.View):
     ) -> bool:
 
         if interaction.user.id != self.owner_id:
+
             await _send_private_error(
                 interaction,
                 "هذه القائمة ليست لك."
                 if self.language == "ar"
                 else "This menu is not yours."
             )
+
             return False
 
         return True
@@ -456,20 +576,25 @@ class CharacterCategoryButton(discord.ui.Button):
         self,
         owner_id: int,
         language: str,
-        category: str
+        category: str,
+        mode: str = "create"
     ):
 
         self.owner_id = owner_id
         self.language = language
         self.category = category
+        self.mode = mode
 
         if category == CATEGORY_ANIME:
+
             label, emoji = (
                 ("شخصيات الأنمي", "⛩️")
                 if language == "ar"
                 else ("Anime Characters", "⛩️")
             )
+
         else:
+
             label, emoji = (
                 ("شخصيات نتفلكس", "🎬")
                 if language == "ar"
@@ -508,7 +633,8 @@ class CharacterCategoryButton(discord.ui.Button):
         view = CharacterChoiceView(
             self.owner_id,
             self.language,
-            options
+            options,
+            self.mode
         )
 
         title = (
@@ -537,19 +663,22 @@ class CharacterChoiceView(discord.ui.View):
         self,
         owner_id: int,
         language: str,
-        options
+        options,
+        mode: str = "create"
     ):
 
         super().__init__(timeout=180)
 
         self.owner_id = owner_id
         self.language = language
+        self.mode = mode
 
         self.add_item(
             CharacterChoiceSelect(
                 owner_id,
                 language,
-                options
+                options,
+                mode
             )
         )
 
@@ -559,12 +688,14 @@ class CharacterChoiceView(discord.ui.View):
     ) -> bool:
 
         if interaction.user.id != self.owner_id:
+
             await _send_private_error(
                 interaction,
                 "هذه القائمة ليست لك."
                 if self.language == "ar"
                 else "This menu is not yours."
             )
+
             return False
 
         return True
@@ -576,11 +707,13 @@ class CharacterChoiceSelect(discord.ui.Select):
         self,
         owner_id: int,
         language: str,
-        options
+        options,
+        mode: str = "create"
     ):
 
         self.owner_id = owner_id
         self.language = language
+        self.mode = mode
 
         super().__init__(
             placeholder=(
@@ -599,48 +732,79 @@ class CharacterChoiceSelect(discord.ui.Select):
         character = get_character(character_id)
 
         if character is None:
+
             await _send_private_error(
                 interaction,
                 "الشخصية غير موجودة."
                 if self.language == "ar"
                 else "Character not found."
             )
+
             return
 
         guild = interaction.guild
 
         if guild is None:
+
             await _send_private_error(
                 interaction,
                 "استخدمها داخل السيرفر."
                 if self.language == "ar"
                 else "Use this inside the server."
             )
+
             return
 
         try:
-            # Create/update the base player without changing active_language.
-            create_player(
-                guild.id,
-                interaction.user.id,
-                interaction.user.name
-            )
 
-            ensure_progress(
-                guild.id,
-                interaction.user.id,
-                self.language
-            )
+            if self.mode == "change":
 
-            # Save the V3 profile and the selected character in the legacy
-            # character table so the card can display the chosen character.
-            save_player_profile(
-                guild.id,
-                interaction.user.id,
-                self.language,
-                character_id
-            )
+                profile = get_player_profile(
+                    guild.id,
+                    interaction.user.id
+                )
 
+                if profile is None:
+
+                    await _send_private_error(
+                        interaction,
+                        "بطاقتك غير موجودة، أنشئ بطاقة جديدة أولاً."
+                        if self.language == "ar"
+                        else "Your profile was not found. Please create a card first."
+                    )
+
+                    return
+
+                # Preserve the existing profile language and V2 progress.
+                save_player_profile(
+                    guild.id,
+                    interaction.user.id,
+                    profile["profile_language"],
+                    character_id
+                )
+
+            else:
+
+                create_player(
+                    guild.id,
+                    interaction.user.id,
+                    interaction.user.name
+                )
+
+                ensure_progress(
+                    guild.id,
+                    interaction.user.id,
+                    self.language
+                )
+
+                save_player_profile(
+                    guild.id,
+                    interaction.user.id,
+                    self.language,
+                    character_id
+                )
+
+            # Save the selected character for the player card.
             select_character(
                 guild.id,
                 interaction.user.id,
@@ -652,117 +816,131 @@ class CharacterChoiceSelect(discord.ui.Select):
                 interaction.user.id
             )
 
-            embed = build_player_card_embed(
+            published = await publish_temporary_player_card(
                 guild,
                 interaction.user,
-                profile,
-                public=True
+                profile
             )
 
-            await interaction.response.edit_message(
-                content=(
-                    "💜 تم إنشاء بطاقة لاعبك!"
+            if self.mode == "create":
+
+                arcade_channel_id = (
+                    ARABIC_ARCADE_CHANNEL_ID
                     if self.language == "ar"
-                    else "💜 Your player card has been created!"
-                ),
-                embed=embed,
-                view=None,
-            )
+                    else ENGLISH_ARCADE_CHANNEL_ID
+                )
 
-            # Publish for 15 minutes; only this public message is temporary.
-            public_message = None
+                arcade_mention = f"<#{arcade_channel_id}>"
 
-            try:
-                channel = guild.get_channel(PLAYER_CARDS_CHANNEL_ID)
+                if self.language == "ar":
 
-                if channel is None:
-                    channel = await interaction.client.fetch_channel(
-                        PLAYER_CARDS_CHANNEL_ID
+                    dm_text = (
+                        f"💜 مبروك {interaction.user.mention}! "
+                        "تم إنشاء بطاقة لاعبك بنجاح.\n\n"
+                        f"قناة ألعابك: {arcade_mention}\n"
+                        "منها تقدر تدخل الألعاب وتجمع XP "
+                        "وترفع مستواك وتفتح الإنجازات والكؤوس."
                     )
 
-                public_message = await channel.send(embed=embed)
+                else:
 
-            except (discord.Forbidden, discord.HTTPException):
-                logger.exception(
-                    "Could not publish temporary player card for %s",
-                    interaction.user.id
-                )
+                    dm_text = (
+                        f"💜 Congratulations {interaction.user.mention}! "
+                        "Your player card has been created successfully.\n\n"
+                        f"Your arcade channel: {arcade_mention}\n"
+                        "Play games there to earn XP, level up, "
+                        "and unlock achievements and trophies."
+                    )
 
-            arcade_channel_id = (
-                ARABIC_ARCADE_CHANNEL_ID
-                if self.language == "ar"
-                else ENGLISH_ARCADE_CHANNEL_ID
+                dm_sent = False
+
+                try:
+
+                    await interaction.user.send(dm_text)
+                    dm_sent = True
+
+                except (discord.Forbidden, discord.HTTPException):
+
+                    logger.info(
+                        "Could not DM player-card confirmation to %s",
+                        interaction.user.id
+                    )
+
+                if published and dm_sent:
+
+                    result_message = (
+                        "💜 تم إنشاء بطاقة لاعبك بنجاح! "
+                        "شيّك على الخاص، رسلت لك رسالة فيها التفاصيل."
+                        if self.language == "ar"
+                        else "💜 Your player card has been created! "
+                        "Check your DMs — I sent you a message with the details."
+                    )
+
+                elif published:
+
+                    result_message = (
+                        "💜 تم إنشاء بطاقة لاعبك ونشرها للعامة! "
+                        "لكن ما قدرت أرسل لك رسالة خاصة، تأكد من إعدادات الخاص."
+                        if self.language == "ar"
+                        else "💜 Your player card was created and published! "
+                        "However, I couldn't DM you. Please check your privacy settings."
+                    )
+
+                else:
+
+                    result_message = (
+                        "تم إنشاء بطاقة لاعبك، لكن تعذر نشرها للعامة الآن."
+                        if self.language == "ar"
+                        else "Your player card was created, but could not be published publicly."
+                    )
+
+            else:
+
+                if published:
+
+                    result_message = (
+                        "💜 تم تغيير شخصيتك ونشر بطاقة لاعبك للعامة لمدة 15 دقيقة."
+                        if self.language == "ar"
+                        else "💜 Your character was changed and your player card is public for 15 minutes."
+                    )
+
+                else:
+
+                    result_message = (
+                        "تم تغيير شخصيتك، لكن تعذر نشر البطاقة الآن."
+                        if self.language == "ar"
+                        else "Your character was changed, but the card could not be published right now."
+                    )
+
+            await interaction.response.edit_message(
+                content=result_message,
+                embed=None,
+                view=None
             )
 
-            arcade_mention = f"<#{arcade_channel_id}>"
-
-            if self.language == "ar":
-                dm_text = (
-                    f"💜 مبروك {interaction.user.mention}! "
-                    "تم إنشاء بطاقة لاعبك بنجاح.\n\n"
-                    f"قناة ألعابك: {arcade_mention}\n"
-                    "منها تقدر تدخل الألعاب وتجمع XP "
-                    "وترفع مستواك وتفتح الإنجازات والكؤوس."
-                )
-            else:
-                dm_text = (
-                    f"💜 Congratulations {interaction.user.mention}! "
-                    "Your player card is ready.\n\n"
-                    f"Your arcade channel: {arcade_mention}\n"
-                    "Play games there to earn XP, level up, "
-                    "and unlock achievements and trophies."
-                )
-
-            try:
-                await interaction.user.send(dm_text)
-
-            except (discord.Forbidden, discord.HTTPException):
-                logger.info(
-                    "Could not DM player-card confirmation to %s",
-                    interaction.user.id
-                )
-
-            if public_message is not None:
-
-                async def remove_public_card():
-
-                    await asyncio.sleep(PUBLIC_CARD_SECONDS)
-
-                    try:
-                        await public_message.delete()
-
-                    except discord.NotFound:
-                        pass
-
-                    except (discord.Forbidden, discord.HTTPException):
-                        logger.exception(
-                            "Could not remove temporary public card for %s",
-                            interaction.user.id
-                        )
-
-                asyncio.create_task(remove_public_card())
-
         except Exception:
+
             logger.exception(
-                "V3 player-card creation failed for %s",
+                "V3 player-card workflow failed for %s",
                 interaction.user.id
             )
 
+            error_message = (
+                "تعذر إكمال العملية، حاول مرة ثانية."
+                if self.language == "ar"
+                else "Could not complete the action. Please try again."
+            )
+
             if interaction.response.is_done():
+
                 await interaction.followup.send(
-                    (
-                        "تعذر إنشاء البطاقة، حاول مرة ثانية."
-                        if self.language == "ar"
-                        else "Could not create your card. Please try again."
-                    ),
-                    ephemeral=True,
+                    error_message,
+                    ephemeral=True
                 )
+
             else:
+
                 await _send_private_error(
                     interaction,
-                    (
-                        "تعذر إنشاء البطاقة، حاول مرة ثانية."
-                        if self.language == "ar"
-                        else "Could not create your card. Please try again."
-                    )
+                    error_message
                 )
