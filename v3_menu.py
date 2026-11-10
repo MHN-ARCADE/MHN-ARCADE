@@ -3,7 +3,8 @@
 MHN ARCADE V3 - Main Menu
 
 Persistent Arabic and English main menus.
-All player interactions are private (ephemeral).
+Games catalog is public.
+Personal player interactions are private (ephemeral).
 """
 
 from __future__ import annotations
@@ -156,7 +157,7 @@ class V3MainMenuView(discord.ui.View):
         return True
 
     # =====================================================
-    # GAMES
+    # GAMES - PUBLIC FOR EVERYONE
     # =====================================================
 
     @discord.ui.button(
@@ -189,14 +190,14 @@ class V3MainMenuView(discord.ui.View):
 
             view = CatalogView(
                 pages=pages,
-                owner_id=interaction.user.id,
+                owner_id=None,
                 language=self.language,
             )
 
             await interaction.response.send_message(
                 embed=pages[0],
                 view=view,
-                ephemeral=True,
+                ephemeral=False,
             )
 
             view.message = await interaction.original_response()
@@ -222,7 +223,7 @@ class V3MainMenuView(discord.ui.View):
                 )
 
     # =====================================================
-    # PROFILE
+    # PROFILE - PRIVATE
     # =====================================================
 
     @discord.ui.button(
@@ -406,7 +407,7 @@ class V3MainMenuView(discord.ui.View):
                 )
 
     # =====================================================
-    # TROPHIES
+    # TROPHIES - PRIVATE
     # =====================================================
 
     @discord.ui.button(
@@ -506,7 +507,7 @@ class V3MainMenuView(discord.ui.View):
                 )
 
     # =====================================================
-    # PERSONAL LEADERBOARD
+    # PERSONAL LEADERBOARD - PRIVATE
     # =====================================================
 
     @discord.ui.button(
