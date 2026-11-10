@@ -136,8 +136,8 @@ class MHNArcadeBot(commands.Bot):
         # Register the new persistent V3 player card panel.
         self.add_view(V3PlayerCardPanelView())
 
-        # Load the V2 arcade games engine.
-        await self.load_extension("games")
+        # V2 games engine temporarily disabled.
+        # Its files and data are preserved for future migration.
 
         # Load the V3 enhanced arcade engine.
         await self.load_extension("v3_discord")
