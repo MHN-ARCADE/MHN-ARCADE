@@ -13,7 +13,6 @@ import logging
 import discord
 
 from engine.achievements import ACHIEVEMENTS
-from engine.i18n import resolve_language
 
 
 logger = logging.getLogger("mhn.arcade.v3.menu")
@@ -44,25 +43,21 @@ def create_main_menu_embed(
             value="تصفح الألعاب واختر اللعبة اللي تبي تلعبها.",
             inline=False,
         )
-
         embed.add_field(
             name="👤 ملفي وإحصائياتي",
-            value="شوف إحصائياتك وتقدمك في الألعاب.",
+            value="شوف مستواك ورتبتك وإحصائياتك.",
             inline=False,
         )
-
         embed.add_field(
             name="🏆 التروفي",
             value="استعرض التروفيات اللي فتحتها واللي باقي لك.",
             inline=False,
         )
-
         embed.add_field(
             name="📊 لوحة المتصدرين",
             value="اعرف ترتيبك بين أعضاء السيرفر.",
             inline=False,
         )
-
         embed.set_footer(
             text="MHN ARCADE V3 • PLAY • COMPETE • WIN"
         )
@@ -82,25 +77,21 @@ def create_main_menu_embed(
             value="Explore the game library and choose a game.",
             inline=False,
         )
-
         embed.add_field(
             name="👤 My Profile & Stats",
-            value="View your gaming statistics and progress.",
+            value="View your level, rank, and gaming statistics.",
             inline=False,
         )
-
         embed.add_field(
             name="🏆 Trophy",
             value="View your unlocked and locked trophies.",
             inline=False,
         )
-
         embed.add_field(
             name="📊 Leaderboard",
             value="See your position among server members.",
             inline=False,
         )
-
         embed.set_footer(
             text="MHN ARCADE V3 • PLAY • COMPETE • WIN"
         )
@@ -131,29 +122,23 @@ class V3MainMenuView(discord.ui.View):
             self.profile_button.label = "ملفي وإحصائياتي"
             self.trophy_button.label = "التروفي"
             self.leaderboard_button.label = "لوحة المتصدرين"
-
         else:
             self.games_button.label = "Browse Games"
             self.profile_button.label = "My Profile & Stats"
             self.trophy_button.label = "Trophy"
             self.leaderboard_button.label = "Leaderboard"
 
-        suffix = language
-
         self.games_button.custom_id = (
-            f"mhn:v3menu:{suffix}:games"
+            f"mhn:v3menu:{language}:games"
         )
-
         self.profile_button.custom_id = (
-            f"mhn:v3menu:{suffix}:profile"
+            f"mhn:v3menu:{language}:profile"
         )
-
         self.trophy_button.custom_id = (
-            f"mhn:v3menu:{suffix}:trophy"
+            f"mhn:v3menu:{language}:trophy"
         )
-
         self.leaderboard_button.custom_id = (
-            f"mhn:v3menu:{suffix}:leaderboard"
+            f"mhn:v3menu:{language}:leaderboard"
         )
 
     async def interaction_check(
@@ -217,9 +202,7 @@ class V3MainMenuView(discord.ui.View):
             view.message = await interaction.original_response()
 
         except Exception:
-            logger.exception(
-                "Main menu game catalog failed."
-            )
+            logger.exception("Main menu game catalog failed.")
 
             message = (
                 "ما قدرنا نفتح قائمة الألعاب، حاول مرة ثانية."
@@ -258,12 +241,29 @@ class V3MainMenuView(discord.ui.View):
         try:
             self.runtime.require_initialized()
 
-            stats = await self.runtime.achievements.get_player_stats(
-                interaction.user.id
+            member = interaction.user
+
+            progress = await self.runtime.progression.get_player_progress(
+                interaction.guild.id,
+                member.id,
+                member.display_name,
             )
 
-            games_played = stats["games_played"]
-            wins = stats["wins"]
+            stats = await self.runtime.achievements.get_player_stats(
+                member.id
+            )
+
+            level = progress["level"]
+            total_xp = progress["total_xp"]
+            current_xp = progress["xp"]
+            next_level_xp = progress["xp_to_next_level"]
+            rank = progress["rank"]
+
+            games_played = progress["games_played"]
+            wins = progress["wins"]
+            losses = progress["losses"]
+            draws = progress["draws"]
+
             multiplayer_games = stats["multiplayer_games"]
             trophies = len(stats["achievements"])
 
@@ -271,30 +271,49 @@ class V3MainMenuView(discord.ui.View):
                 embed = discord.Embed(
                     title="👤 ملف اللاعب",
                     description=(
-                        f"**اللاعب:** {interaction.user.mention}\n"
+                        f"**اللاعب:** {member.mention}\n"
+                        f"**الرتبة:** {rank}\n"
+                        f"**المستوى:** {level}\n"
                         "إحصائياتك في MHN ARCADE V3"
                     ),
                     color=PURPLE,
                 )
 
                 embed.add_field(
+                    name="⭐ مجموع XP",
+                    value=f"{total_xp:,}",
+                    inline=True,
+                )
+                embed.add_field(
+                    name="📈 تقدم المستوى",
+                    value=f"{current_xp:,} / {next_level_xp:,}",
+                    inline=True,
+                )
+                embed.add_field(
                     name="🎮 الألعاب المكتملة",
                     value=str(games_played),
                     inline=True,
                 )
-
                 embed.add_field(
                     name="🏆 الانتصارات",
                     value=str(wins),
                     inline=True,
                 )
-
+                embed.add_field(
+                    name="❌ الخسائر",
+                    value=str(losses),
+                    inline=True,
+                )
+                embed.add_field(
+                    name="🤝 التعادلات",
+                    value=str(draws),
+                    inline=True,
+                )
                 embed.add_field(
                     name="👥 الألعاب الجماعية",
                     value=str(multiplayer_games),
                     inline=True,
                 )
-
                 embed.add_field(
                     name="💎 التروفيات المفتوحة",
                     value=str(trophies),
@@ -305,30 +324,49 @@ class V3MainMenuView(discord.ui.View):
                 embed = discord.Embed(
                     title="👤 Player Profile",
                     description=(
-                        f"**Player:** {interaction.user.mention}\n"
+                        f"**Player:** {member.mention}\n"
+                        f"**Rank:** {rank}\n"
+                        f"**Level:** {level}\n"
                         "Your MHN ARCADE V3 statistics."
                     ),
                     color=PURPLE,
                 )
 
                 embed.add_field(
+                    name="⭐ Total XP",
+                    value=f"{total_xp:,}",
+                    inline=True,
+                )
+                embed.add_field(
+                    name="📈 Level Progress",
+                    value=f"{current_xp:,} / {next_level_xp:,}",
+                    inline=True,
+                )
+                embed.add_field(
                     name="🎮 Games Completed",
                     value=str(games_played),
                     inline=True,
                 )
-
                 embed.add_field(
                     name="🏆 Wins",
                     value=str(wins),
                     inline=True,
                 )
-
+                embed.add_field(
+                    name="❌ Losses",
+                    value=str(losses),
+                    inline=True,
+                )
+                embed.add_field(
+                    name="🤝 Draws",
+                    value=str(draws),
+                    inline=True,
+                )
                 embed.add_field(
                     name="👥 Multiplayer Games",
                     value=str(multiplayer_games),
                     inline=True,
                 )
-
                 embed.add_field(
                     name="💎 Trophies Unlocked",
                     value=str(trophies),
@@ -336,9 +374,8 @@ class V3MainMenuView(discord.ui.View):
                 )
 
             embed.set_thumbnail(
-                url=interaction.user.display_avatar.url
+                url=member.display_avatar.url
             )
-
             embed.set_footer(
                 text="MHN ARCADE V3"
             )
@@ -349,9 +386,7 @@ class V3MainMenuView(discord.ui.View):
             )
 
         except Exception:
-            logger.exception(
-                "Main menu player profile failed."
-            )
+            logger.exception("Main menu player profile failed.")
 
             message = (
                 "ما قدرنا نعرض ملفك الحين، حاول مرة ثانية."
@@ -443,9 +478,7 @@ class V3MainMenuView(discord.ui.View):
                     inline=False,
                 )
 
-            embed.set_footer(
-                text="MHN ARCADE V3"
-            )
+            embed.set_footer(text="MHN ARCADE V3")
 
             await interaction.response.send_message(
                 embed=embed,
@@ -453,9 +486,7 @@ class V3MainMenuView(discord.ui.View):
             )
 
         except Exception:
-            logger.exception(
-                "Main menu trophy display failed."
-            )
+            logger.exception("Main menu trophy display failed.")
 
             message = (
                 "ما قدرنا نعرض التروفيات الحين، حاول مرة ثانية."
@@ -491,30 +522,164 @@ class V3MainMenuView(discord.ui.View):
         button: discord.ui.Button,
     ) -> None:
 
-        message = (
-            "لوحة ترتيب جميع أعضاء السيرفر بنربطها بنظام XP "
-            "بعد ما نكمل ربط مكافآت ألعاب V3."
-            if self.language == "ar"
-            else
-            "The all-member ranking will be connected after "
-            "V3 game XP rewards are integrated."
-        )
+        try:
+            self.runtime.require_initialized()
 
-        embed = discord.Embed(
-            title=(
-                "📊 لوحة المتصدرين"
+            guild = interaction.guild
+
+            # Include all cached human server members,
+            # including members who have never earned XP.
+            rankings = await self.runtime.progression.get_leaderboard(
+                guild_id=guild.id,
+                members=guild.members,
+                limit=0,
+            )
+
+            if not rankings:
+                message = (
+                    "ما فيه أعضاء ظاهرين في لوحة الترتيب حاليًا."
+                    if self.language == "ar"
+                    else "There are no members available for the leaderboard."
+                )
+
+                await interaction.response.send_message(
+                    message,
+                    ephemeral=True,
+                )
+                return
+
+            my_entry = next(
+                (
+                    item for item in rankings
+                    if item["user_id"] == str(interaction.user.id)
+                ),
+                None,
+            )
+
+            if my_entry is None:
+                message = (
+                    "ما قدرنا نحدد ترتيبك حاليًا."
+                    if self.language == "ar"
+                    else "Your ranking could not be determined."
+                )
+
+                await interaction.response.send_message(
+                    message,
+                    ephemeral=True,
+                )
+                return
+
+            top_players = rankings[:10]
+
+            if self.language == "ar":
+                lines = []
+
+                for player in top_players:
+                    medal = (
+                        "🥇" if player["position"] == 1
+                        else "🥈" if player["position"] == 2
+                        else "🥉" if player["position"] == 3
+                        else "🏅"
+                    )
+
+                    lines.append(
+                        f"{medal} **#{player['position']} "
+                        f"{discord.utils.escape_markdown(player['username'])}**"
+                        f" — مستوى {player['level']} "
+                        f"• {player['total_xp']:,} XP"
+                    )
+
+                description = "\n".join(lines)
+
+                if my_entry["position"] > 10:
+                    description += (
+                        "\n\n━━━━━━━━━━━━━━\n"
+                        f"👤 **ترتيبك:** #{my_entry['position']}\n"
+                        f"**مستواك:** {my_entry['level']}\n"
+                        f"**XP:** {my_entry['total_xp']:,}"
+                    )
+                else:
+                    description += (
+                        "\n\n━━━━━━━━━━━━━━\n"
+                        f"💜 **ترتيبك الحالي: #{my_entry['position']}**"
+                    )
+
+                title = "📊 لوحة المتصدرين"
+
+            else:
+                lines = []
+
+                for player in top_players:
+                    medal = (
+                        "🥇" if player["position"] == 1
+                        else "🥈" if player["position"] == 2
+                        else "🥉" if player["position"] == 3
+                        else "🏅"
+                    )
+
+                    lines.append(
+                        f"{medal} **#{player['position']} "
+                        f"{discord.utils.escape_markdown(player['username'])}**"
+                        f" — Level {player['level']} "
+                        f"• {player['total_xp']:,} XP"
+                    )
+
+                description = "\n".join(lines)
+
+                if my_entry["position"] > 10:
+                    description += (
+                        "\n\n━━━━━━━━━━━━━━\n"
+                        f"👤 **Your Position:** #{my_entry['position']}\n"
+                        f"**Your Level:** {my_entry['level']}\n"
+                        f"**Your XP:** {my_entry['total_xp']:,}"
+                    )
+                else:
+                    description += (
+                        "\n\n━━━━━━━━━━━━━━\n"
+                        f"💜 **Your Current Position: #{my_entry['position']}**"
+                    )
+
+                title = "📊 Leaderboard"
+
+            embed = discord.Embed(
+                title=title,
+                description=description,
+                color=PURPLE,
+            )
+
+            embed.set_thumbnail(
+                url=guild.icon.url if guild.icon else interaction.user.display_avatar.url
+            )
+
+            embed.set_footer(
+                text=(
+                    f"MHN ARCADE V3 • {len(rankings)} members ranked"
+                    if self.language != "ar"
+                    else f"MHN ARCADE V3 • عدد الأعضاء: {len(rankings)}"
+                )
+            )
+
+            await interaction.response.send_message(
+                embed=embed,
+                ephemeral=True,
+            )
+
+        except Exception:
+            logger.exception("Main menu leaderboard failed.")
+
+            message = (
+                "ما قدرنا نعرض لوحة المتصدرين الحين، حاول مرة ثانية."
                 if self.language == "ar"
-                else "📊 Leaderboard"
-            ),
-            description=message,
-            color=PURPLE,
-        )
+                else "Could not load the leaderboard. Please try again."
+            )
 
-        embed.set_footer(
-            text="MHN ARCADE V3"
-        )
-
-        await interaction.response.send_message(
-            embed=embed,
-            ephemeral=True,
-        )
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    message,
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    message,
+                    ephemeral=True,
+                )
