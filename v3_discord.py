@@ -340,7 +340,7 @@ class CatalogView(discord.ui.View):
     def __init__(
         self,
         pages: list[discord.Embed],
-        owner_id: int,
+        owner_id: int | None,
         language: str = "en",
     ) -> None:
 
@@ -368,7 +368,10 @@ class CatalogView(discord.ui.View):
         interaction: discord.Interaction,
     ) -> bool:
 
-        if interaction.user.id != self.owner_id:
+        if (
+            self.owner_id is not None
+            and interaction.user.id != self.owner_id
+        ):
             await interaction.response.send_message(
                 t("owner_only", self.language),
                 ephemeral=True,
@@ -930,7 +933,7 @@ class V3Games(commands.Cog):
         self.runtime.achievement_announcement_callback = (
             self._announce_achievements
         )
-        
+
     async def _announce_achievements(
         self,
         unlocked: list[dict[str, str]],
@@ -994,7 +997,7 @@ class V3Games(commands.Cog):
                     item["achievement_id"],
                     user_id,
                 )
-                
+
     @app_commands.command(
         name="arcade_v3",
         description="Open the MHN ARCADE V3 game catalog.",
