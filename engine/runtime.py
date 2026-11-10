@@ -3,7 +3,13 @@
 MHN ARCADE V3 - Runtime
 
 Central runtime for the V3 game engine.
-V3 achievements use the same isolated V3 database.
+Connects:
+- Game sessions
+- XP progression
+- Player ranks
+- Achievements
+- Result recovery
+
 V2 remains completely independent.
 """
 
@@ -19,6 +25,7 @@ from .achievements import V3AchievementManager
 from .catalog import build_default_registry
 from .core import SessionManager
 from .lobby import LobbyManager
+from .progression import V3ProgressionManager
 from .registry import GameRegistry
 from .repository import SQLiteSessionRepository
 from .runner import GameRunner
@@ -49,7 +56,12 @@ class V3Runtime:
             db_path=selected_db_path
         )
 
+        # All V3 systems share the same isolated database.
         self.achievements = V3AchievementManager(
+            db_path=self.repository.db_path
+        )
+
+        self.progression = V3ProgressionManager(
             db_path=self.repository.db_path
         )
 
@@ -83,9 +95,48 @@ class V3Runtime:
     def initialized(self) -> bool:
         return self._initialized and not self._closed
 
-    async def _on_session_completed(self, session: Any) -> None:
-        """Process completed games through the V3 achievement engine."""
+    # =====================================================
+    # COMPLETED GAME PROCESSING
+    # =====================================================
 
+    async def _on_session_completed(
+        self,
+        session: Any,
+    ) -> None:
+        """
+        Process completed games through both V3 systems.
+
+        XP and achievements use independent idempotency
+        checks, so retrying a completed session does not
+        award duplicate progress.
+        """
+
+        session_id = getattr(
+            session,
+            "session_id",
+            "unknown",
+        )
+
+        # Process XP independently.
+        try:
+            rewards = await self.progression.record_completed_game(
+                session
+            )
+
+            if rewards:
+                logger.info(
+                    "V3 XP processed for session %s: %s player(s)",
+                    session_id,
+                    len(rewards),
+                )
+
+        except Exception:
+            logger.exception(
+                "V3 XP processing failed for session %s",
+                session_id,
+            )
+
+        # Process achievements independently.
         try:
             unlocked = await self.achievements.record_completed_game(
                 session
@@ -105,11 +156,15 @@ class V3Runtime:
         except Exception:
             logger.exception(
                 "V3 achievement processing failed for session %s",
-                getattr(session, "session_id", "unknown"),
+                session_id,
             )
 
+    # =====================================================
+    # INITIALIZATION AND RECOVERY
+    # =====================================================
+
     async def initialize(self) -> "V3Runtime":
-        """Initialize V3 storage and recover pending completed results."""
+        """Initialize V3 storage and recover completed results."""
 
         if self._closed:
             raise RuntimeError(
@@ -120,13 +175,18 @@ class V3Runtime:
             return self
 
         try:
-            await self.achievements.initialize()
+            # Initialize the shared database tables first.
+            await self.repository.initialize()
 
-            # Recover completed sessions in case the process stopped
-            # after saving a result but before updating achievements.
+            await self.achievements.initialize()
+            await self.progression.initialize()
+
+            # Recover completed sessions in case the process
+            # stopped before XP or achievements were processed.
             stored_sessions = await self.repository.load_sessions()
 
             for stored_data in stored_sessions:
+
                 if stored_data.get("status") != "completed":
                     continue
 
@@ -135,13 +195,19 @@ class V3Runtime:
                         stored_data
                     )
 
+                    # Each system has its own duplicate protection.
+                    await self.progression.record_completed_game(
+                        session
+                    )
+
                     await self.achievements.record_completed_game(
                         session
                     )
 
                 except Exception:
                     logger.exception(
-                        "Could not recover V3 achievement result."
+                        "Could not recover V3 result for session %s",
+                        stored_data.get("session_id", "unknown"),
                     )
 
             await self.sessions.initialize()
@@ -152,7 +218,16 @@ class V3Runtime:
             ) from exc
 
         self._initialized = True
+
+        logger.info(
+            "MHN ARCADE V3 initialized successfully."
+        )
+
         return self
+
+    # =====================================================
+    # STATUS
+    # =====================================================
 
     def require_initialized(self) -> None:
         if not self.initialized:
@@ -168,7 +243,12 @@ class V3Runtime:
             "game_ids": list(self.registry.game_ids),
             "database": str(self.repository.db_path),
             "achievements_enabled": self.initialized,
+            "progression_enabled": self.initialized,
         }
+
+    # =====================================================
+    # SHUTDOWN
+    # =====================================================
 
     async def shutdown(self) -> None:
         if self._closed:
@@ -179,6 +259,10 @@ class V3Runtime:
         self._initialized = False
         self._closed = True
 
+
+# =========================================================
+# RUNTIME FACTORY
+# =========================================================
 
 async def create_v3_runtime(
     db_path: str | Path | None = None,
