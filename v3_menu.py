@@ -1,0 +1,520 @@
+
+"""
+MHN ARCADE V3 - Main Menu
+
+Persistent Arabic and English main menus.
+All player interactions are private (ephemeral).
+"""
+
+from __future__ import annotations
+
+import logging
+
+import discord
+
+from engine.achievements import ACHIEVEMENTS
+from engine.i18n import resolve_language
+
+
+logger = logging.getLogger("mhn.arcade.v3.menu")
+
+PURPLE = 0x7C3AED
+
+
+# =========================================================
+# MAIN MENU EMBEDS
+# =========================================================
+
+def create_main_menu_embed(
+    language: str = "en",
+) -> discord.Embed:
+
+    if language == "ar":
+        embed = discord.Embed(
+            title="🎮 MHN ARCADE V3",
+            description=(
+                "مرحبًا بك في MHN ARCADE!\n"
+                "اختر وش تبي تسوي من الخيارات اللي تحت."
+            ),
+            color=PURPLE,
+        )
+
+        embed.add_field(
+            name="🎮 الألعاب",
+            value="تصفح الألعاب واختر اللعبة اللي تبي تلعبها.",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="👤 ملفي وإحصائياتي",
+            value="شوف إحصائياتك وتقدمك في الألعاب.",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="🏆 التروفي",
+            value="استعرض التروفيات اللي فتحتها واللي باقي لك.",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="📊 لوحة المتصدرين",
+            value="اعرف ترتيبك بين أعضاء السيرفر.",
+            inline=False,
+        )
+
+        embed.set_footer(
+            text="MHN ARCADE V3 • PLAY • COMPETE • WIN"
+        )
+
+    else:
+        embed = discord.Embed(
+            title="🎮 MHN ARCADE V3",
+            description=(
+                "Welcome to MHN ARCADE!\n"
+                "Choose what you'd like to do below."
+            ),
+            color=PURPLE,
+        )
+
+        embed.add_field(
+            name="🎮 Browse Games",
+            value="Explore the game library and choose a game.",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="👤 My Profile & Stats",
+            value="View your gaming statistics and progress.",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="🏆 Trophy",
+            value="View your unlocked and locked trophies.",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="📊 Leaderboard",
+            value="See your position among server members.",
+            inline=False,
+        )
+
+        embed.set_footer(
+            text="MHN ARCADE V3 • PLAY • COMPETE • WIN"
+        )
+
+    return embed
+
+
+# =========================================================
+# MAIN MENU VIEW
+# =========================================================
+
+class V3MainMenuView(discord.ui.View):
+    """Persistent main menu for Arabic or English channels."""
+
+    def __init__(
+        self,
+        runtime,
+        language: str = "en",
+    ) -> None:
+
+        super().__init__(timeout=None)
+
+        self.runtime = runtime
+        self.language = language
+
+        if language == "ar":
+            self.games_button.label = "الألعاب"
+            self.profile_button.label = "ملفي وإحصائياتي"
+            self.trophy_button.label = "التروفي"
+            self.leaderboard_button.label = "لوحة المتصدرين"
+
+        else:
+            self.games_button.label = "Browse Games"
+            self.profile_button.label = "My Profile & Stats"
+            self.trophy_button.label = "Trophy"
+            self.leaderboard_button.label = "Leaderboard"
+
+        suffix = language
+
+        self.games_button.custom_id = (
+            f"mhn:v3menu:{suffix}:games"
+        )
+
+        self.profile_button.custom_id = (
+            f"mhn:v3menu:{suffix}:profile"
+        )
+
+        self.trophy_button.custom_id = (
+            f"mhn:v3menu:{suffix}:trophy"
+        )
+
+        self.leaderboard_button.custom_id = (
+            f"mhn:v3menu:{suffix}:leaderboard"
+        )
+
+    async def interaction_check(
+        self,
+        interaction: discord.Interaction,
+    ) -> bool:
+
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This menu can only be used inside a server.",
+                ephemeral=True,
+            )
+            return False
+
+        return True
+
+    # =====================================================
+    # GAMES
+    # =====================================================
+
+    @discord.ui.button(
+        label="Browse Games",
+        emoji="🎮",
+        style=discord.ButtonStyle.primary,
+        custom_id="mhn:v3menu:en:games",
+        row=0,
+    )
+    async def games_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+
+        try:
+            self.runtime.require_initialized()
+
+            from v3_discord import (
+                build_catalog_pages,
+                CatalogView,
+            )
+
+            games = self.runtime.runner.list_games()
+
+            pages = build_catalog_pages(
+                games,
+                self.language,
+            )
+
+            view = CatalogView(
+                pages=pages,
+                owner_id=interaction.user.id,
+                language=self.language,
+            )
+
+            await interaction.response.send_message(
+                embed=pages[0],
+                view=view,
+                ephemeral=True,
+            )
+
+            view.message = await interaction.original_response()
+
+        except Exception:
+            logger.exception(
+                "Main menu game catalog failed."
+            )
+
+            message = (
+                "ما قدرنا نفتح قائمة الألعاب، حاول مرة ثانية."
+                if self.language == "ar"
+                else "Could not open the game library. Please try again."
+            )
+
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    message,
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    message,
+                    ephemeral=True,
+                )
+
+    # =====================================================
+    # PROFILE
+    # =====================================================
+
+    @discord.ui.button(
+        label="My Profile & Stats",
+        emoji="👤",
+        style=discord.ButtonStyle.secondary,
+        custom_id="mhn:v3menu:en:profile",
+        row=0,
+    )
+    async def profile_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+
+        try:
+            self.runtime.require_initialized()
+
+            stats = await self.runtime.achievements.get_player_stats(
+                interaction.user.id
+            )
+
+            games_played = stats["games_played"]
+            wins = stats["wins"]
+            multiplayer_games = stats["multiplayer_games"]
+            trophies = len(stats["achievements"])
+
+            if self.language == "ar":
+                embed = discord.Embed(
+                    title="👤 ملف اللاعب",
+                    description=(
+                        f"**اللاعب:** {interaction.user.mention}\n"
+                        "إحصائياتك في MHN ARCADE V3"
+                    ),
+                    color=PURPLE,
+                )
+
+                embed.add_field(
+                    name="🎮 الألعاب المكتملة",
+                    value=str(games_played),
+                    inline=True,
+                )
+
+                embed.add_field(
+                    name="🏆 الانتصارات",
+                    value=str(wins),
+                    inline=True,
+                )
+
+                embed.add_field(
+                    name="👥 الألعاب الجماعية",
+                    value=str(multiplayer_games),
+                    inline=True,
+                )
+
+                embed.add_field(
+                    name="💎 التروفيات المفتوحة",
+                    value=str(trophies),
+                    inline=True,
+                )
+
+            else:
+                embed = discord.Embed(
+                    title="👤 Player Profile",
+                    description=(
+                        f"**Player:** {interaction.user.mention}\n"
+                        "Your MHN ARCADE V3 statistics."
+                    ),
+                    color=PURPLE,
+                )
+
+                embed.add_field(
+                    name="🎮 Games Completed",
+                    value=str(games_played),
+                    inline=True,
+                )
+
+                embed.add_field(
+                    name="🏆 Wins",
+                    value=str(wins),
+                    inline=True,
+                )
+
+                embed.add_field(
+                    name="👥 Multiplayer Games",
+                    value=str(multiplayer_games),
+                    inline=True,
+                )
+
+                embed.add_field(
+                    name="💎 Trophies Unlocked",
+                    value=str(trophies),
+                    inline=True,
+                )
+
+            embed.set_thumbnail(
+                url=interaction.user.display_avatar.url
+            )
+
+            embed.set_footer(
+                text="MHN ARCADE V3"
+            )
+
+            await interaction.response.send_message(
+                embed=embed,
+                ephemeral=True,
+            )
+
+        except Exception:
+            logger.exception(
+                "Main menu player profile failed."
+            )
+
+            message = (
+                "ما قدرنا نعرض ملفك الحين، حاول مرة ثانية."
+                if self.language == "ar"
+                else "Could not load your profile. Please try again."
+            )
+
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    message,
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    message,
+                    ephemeral=True,
+                )
+
+    # =====================================================
+    # TROPHIES
+    # =====================================================
+
+    @discord.ui.button(
+        label="Trophy",
+        emoji="🏆",
+        style=discord.ButtonStyle.secondary,
+        custom_id="mhn:v3menu:en:trophy",
+        row=1,
+    )
+    async def trophy_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+
+        try:
+            self.runtime.require_initialized()
+
+            stats = await self.runtime.achievements.get_player_stats(
+                interaction.user.id
+            )
+
+            unlocked_ids = {
+                item["achievement_id"]
+                for item in stats["achievements"]
+            }
+
+            embed = discord.Embed(
+                title=(
+                    "🏆 التروفي"
+                    if self.language == "ar"
+                    else "🏆 Trophy Collection"
+                ),
+                description=(
+                    f"**{len(unlocked_ids)}/{len(ACHIEVEMENTS)}** "
+                    + (
+                        "تروفيات مفتوحة"
+                        if self.language == "ar"
+                        else "trophies unlocked"
+                    )
+                ),
+                color=PURPLE,
+            )
+
+            for achievement_id, definition in ACHIEVEMENTS.items():
+
+                unlocked = achievement_id in unlocked_ids
+
+                if self.language == "ar":
+                    name = definition["name_ar"]
+                    description = definition["description_ar"]
+                    status = (
+                        "✅ مفتوح"
+                        if unlocked
+                        else "🔒 مقفول"
+                    )
+                else:
+                    name = definition["name_en"]
+                    description = definition["description_en"]
+                    status = (
+                        "✅ Unlocked"
+                        if unlocked
+                        else "🔒 Locked"
+                    )
+
+                embed.add_field(
+                    name=f"{status} • {name}",
+                    value=description,
+                    inline=False,
+                )
+
+            embed.set_footer(
+                text="MHN ARCADE V3"
+            )
+
+            await interaction.response.send_message(
+                embed=embed,
+                ephemeral=True,
+            )
+
+        except Exception:
+            logger.exception(
+                "Main menu trophy display failed."
+            )
+
+            message = (
+                "ما قدرنا نعرض التروفيات الحين، حاول مرة ثانية."
+                if self.language == "ar"
+                else "Could not load your trophies. Please try again."
+            )
+
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    message,
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    message,
+                    ephemeral=True,
+                )
+
+    # =====================================================
+    # PERSONAL LEADERBOARD
+    # =====================================================
+
+    @discord.ui.button(
+        label="Leaderboard",
+        emoji="📊",
+        style=discord.ButtonStyle.success,
+        custom_id="mhn:v3menu:en:leaderboard",
+        row=1,
+    )
+    async def leaderboard_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+
+        message = (
+            "لوحة ترتيب جميع أعضاء السيرفر بنربطها بنظام XP "
+            "بعد ما نكمل ربط مكافآت ألعاب V3."
+            if self.language == "ar"
+            else
+            "The all-member ranking will be connected after "
+            "V3 game XP rewards are integrated."
+        )
+
+        embed = discord.Embed(
+            title=(
+                "📊 لوحة المتصدرين"
+                if self.language == "ar"
+                else "📊 Leaderboard"
+            ),
+            description=message,
+            color=PURPLE,
+        )
+
+        embed.set_footer(
+            text="MHN ARCADE V3"
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True,
+        )
