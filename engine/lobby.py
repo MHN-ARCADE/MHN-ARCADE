@@ -1,24 +1,29 @@
+
 """
 MHN ARCADE V3 - Lobby Manager
 
-A simple lobby interface built on top of SessionManager.
-
-This module handles lobby operations.
-Discord buttons and commands will be connected later.
+Manages multiplayer lobby operations.
+Discord buttons and commands are connected
+through the V3 Discord interface.
 """
 
 from __future__ import annotations
 
 from typing import Any, Mapping
 
-from .core import GameSession, SessionManager
+from .core import GameSession, SessionManager, SessionError
+
+
+MAX_MULTIPLAYER_PLAYERS = 30
 
 
 class LobbyManager:
     """
     Lobby operations for multiplayer games.
 
-    This class does not depend on Discord.py.
+    The lobby creator is the host.
+    Only the host can change capacity,
+    kick players, start or close the lobby.
     """
 
     def __init__(
@@ -38,9 +43,21 @@ class LobbyManager:
         host_id: str | int,
         host_name: str,
         min_players: int = 3,
-        max_players: int = 12,
+        max_players: int = MAX_MULTIPLAYER_PLAYERS,
         metadata: Mapping[str, Any] | None = None,
     ) -> GameSession:
+
+        if not isinstance(max_players, int) or isinstance(max_players, bool):
+            raise SessionError("Player limit must be an integer.")
+
+        if not 1 <= max_players <= MAX_MULTIPLAYER_PLAYERS:
+            raise SessionError(
+                f"Player limit must be between 1 and "
+                f"{MAX_MULTIPLAYER_PLAYERS}."
+            )
+
+        if min_players < 1 or min_players > max_players:
+            raise SessionError("Invalid minimum player requirement.")
 
         return await self.sessions.create_session(
             guild_id=guild_id,
@@ -85,7 +102,56 @@ class LobbyManager:
         )
 
     # =====================================================
+    # CHANGE LOBBY CAPACITY
+    # HOST ONLY
+    # =====================================================
+
+    async def set_capacity(
+        self,
+        session_id: str,
+        host_id: str | int,
+        max_players: int,
+    ) -> GameSession:
+
+        if (
+            not isinstance(max_players, int)
+            or isinstance(max_players, bool)
+        ):
+            raise SessionError("Player limit must be an integer.")
+
+        if not 1 <= max_players <= MAX_MULTIPLAYER_PLAYERS:
+            raise SessionError(
+                f"Player limit must be between 1 and "
+                f"{MAX_MULTIPLAYER_PLAYERS}."
+            )
+
+        return await self.sessions.set_lobby_capacity(
+            session_id=session_id,
+            host_id=host_id,
+            max_players=max_players,
+        )
+
+    # =====================================================
+    # KICK PLAYER
+    # HOST ONLY
+    # =====================================================
+
+    async def kick(
+        self,
+        session_id: str,
+        host_id: str | int,
+        target_id: str | int,
+    ) -> GameSession:
+
+        return await self.sessions.kick_player(
+            session_id=session_id,
+            host_id=host_id,
+            target_id=target_id,
+        )
+
+    # =====================================================
     # START GAME
+    # HOST ONLY
     # =====================================================
 
     async def start(
@@ -101,6 +167,7 @@ class LobbyManager:
 
     # =====================================================
     # CLOSE LOBBY
+    # HOST ONLY
     # =====================================================
 
     async def close(
