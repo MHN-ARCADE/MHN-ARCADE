@@ -1163,6 +1163,7 @@ class V3DashboardManager:
         guild: discord.Guild,
     ) -> None:
 
+        # Keep the unified leaderboard only in the dedicated channel.
         combined = await self.build_leaderboard_embeds(
             guild,
             language="both",
@@ -1175,28 +1176,16 @@ class V3DashboardManager:
             combined,
         )
 
-        arabic = await self.build_leaderboard_embeds(
-            guild,
-            language="ar",
-        )
-
-        await self._ensure_message(
+        # Remove the old Arabic and English leaderboard messages
+        # from the arcade channels and clear their saved records.
+        await self._delete_saved_message(
             guild,
             "v3_leaderboard_ar",
-            ARABIC_ARCADE_CHANNEL_ID,
-            arabic,
         )
 
-        english = await self.build_leaderboard_embeds(
-            guild,
-            language="en",
-        )
-
-        await self._ensure_message(
+        await self._delete_saved_message(
             guild,
             "v3_leaderboard_en",
-            ENGLISH_ARCADE_CHANNEL_ID,
-            english,
         )
 
     # =====================================================
