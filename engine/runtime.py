@@ -9,12 +9,14 @@ Connects:
 - Player ranks
 - Achievements
 - Result recovery
+- Generic session lifecycle notifications
 
 V2 remains completely independent.
 """
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 
@@ -69,12 +71,24 @@ class V3Runtime:
             Callable[[list[dict[str, str]]], Any] | None
         ) = None
 
+        # Optional external callback for Discord or other integrations.
+        # Signature: callback(session, event)
+        self.session_lifecycle_callback: (
+            Callable[[Any, str], Any] | None
+        ) = None
+
         self.sessions = SessionManager(
             repository=self.repository
         )
 
+        # Keep completed-game processing independent.
         self.sessions.add_completion_listener(
             self._on_session_completed
+        )
+
+        # Forward all terminal lifecycle events separately.
+        self.sessions.add_lifecycle_listener(
+            self._on_session_lifecycle_event
         )
 
         self.lobbies = LobbyManager(
@@ -94,6 +108,63 @@ class V3Runtime:
     @property
     def initialized(self) -> bool:
         return self._initialized and not self._closed
+
+    # =====================================================
+    # SESSION LIFECYCLE INTEGRATION
+    # =====================================================
+
+    def set_session_lifecycle_callback(
+        self,
+        callback: Callable[[Any, str], Any] | None,
+    ) -> None:
+        """
+        Set an external callback for terminal session events.
+
+        Callback signature:
+            callback(session, event)
+
+        Supported events:
+            completed
+            cancelled
+
+        This callback is independent from XP and achievements.
+        """
+
+        if callback is not None and not callable(callback):
+            raise RuntimeError(
+                "Session lifecycle callback must be callable."
+            )
+
+        self.session_lifecycle_callback = callback
+
+    async def _on_session_lifecycle_event(
+        self,
+        session: Any,
+        event: str,
+    ) -> None:
+        """
+        Forward terminal session events to external integrations.
+
+        The core engine remains Discord-independent.
+        """
+
+        callback = self.session_lifecycle_callback
+
+        if not callable(callback):
+            return
+
+        try:
+            result = callback(session, event)
+
+            if inspect.isawaitable(result):
+                await result
+
+        except Exception:
+            logger.exception(
+                "V3 lifecycle callback failed for session %s (%s)",
+                getattr(session, "session_id", "unknown"),
+                event,
+            )
 
     # =====================================================
     # COMPLETED GAME PROCESSING
@@ -150,7 +221,7 @@ class V3Runtime:
             if callable(callback):
                 result = callback(unlocked)
 
-                if hasattr(result, "__await__"):
+                if inspect.isawaitable(result):
                     await result
 
         except Exception:
@@ -244,6 +315,10 @@ class V3Runtime:
             "database": str(self.repository.db_path),
             "achievements_enabled": self.initialized,
             "progression_enabled": self.initialized,
+            "lifecycle_notifications_enabled": True,
+            "lifecycle_callback_connected": (
+                callable(self.session_lifecycle_callback)
+            ),
         }
 
     # =====================================================
@@ -255,6 +330,8 @@ class V3Runtime:
             return
 
         await self.sessions.shutdown()
+
+        self.session_lifecycle_callback = None
 
         self._initialized = False
         self._closed = True
