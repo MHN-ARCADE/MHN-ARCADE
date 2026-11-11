@@ -13,7 +13,7 @@ import logging
 
 import discord
 
-from engine.achievements import ACHIEVEMENTS
+from engine.achievements import ACHIEVEMENTS, TROPHY_TIERS
 from characters import get_character
 from database import get_selected_character
 
@@ -97,6 +97,147 @@ def create_main_menu_embed(
         embed.set_footer(
             text="MHN ARCADE V3 • PLAY • COMPETE • WIN"
         )
+
+    return embed
+
+
+# =========================================================
+# TROPHY COLLECTION EMBED
+# =========================================================
+
+def create_player_trophy_embed(
+    stats: dict,
+    language: str = "en",
+) -> discord.Embed:
+    """Builds the complete 18-trophy collection for one player."""
+
+    unlocked_ids = {
+        item["achievement_id"]
+        for item in stats.get("achievements", [])
+    }
+
+    total_trophies = len(ACHIEVEMENTS)
+    unlocked_count = len(
+        unlocked_ids.intersection(ACHIEVEMENTS.keys())
+    )
+
+    if language == "ar":
+        title = "🏆 مجموعة التروفيات"
+        progress_text = (
+            f"**تقدمك:** {unlocked_count}/{total_trophies} تروفي مفتوح\n"
+            "اجمع التروفيات من خلال اللعب وتحقيق الشروط المطلوبة."
+        )
+    else:
+        title = "🏆 Trophy Collection"
+        progress_text = (
+            f"**Your Progress:** {unlocked_count}/{total_trophies} trophies unlocked\n"
+            "Play games and complete the requirements to collect them all."
+        )
+
+    embed = discord.Embed(
+        title=title,
+        description=progress_text,
+        color=PURPLE,
+    )
+
+    tier_order = (
+        "Common",
+        "Uncommon",
+        "Rare",
+        "Very Rare",
+        "Legendary",
+        "Platinum",
+    )
+
+    for rarity in tier_order:
+
+        tier = TROPHY_TIERS.get(rarity, {})
+
+        tier_trophies = [
+            (achievement_id, definition)
+            for achievement_id, definition in ACHIEVEMENTS.items()
+            if definition.get("rarity") == rarity
+        ]
+
+        if not tier_trophies:
+            continue
+
+        if language == "ar":
+            tier_name = tier.get("name_ar", rarity)
+            rank_name = tier.get("rank_ar", "")
+            level_range = tier.get("level_range", "")
+            field_name = (
+                f"🏅 {tier_name} — {rank_name}"
+            )
+            level_label = "المستوى"
+            required_label = "شرط الفتح"
+            unlocked_label = "مفتوح"
+            locked_label = "مقفول"
+        else:
+            tier_name = rarity
+            rank_name = tier.get("rank_en", "")
+            level_range = tier.get("level_range", "")
+            field_name = (
+                f"🏅 {tier_name} — {rank_name}"
+            )
+            level_label = "Level"
+            required_label = "Requirement"
+            unlocked_label = "Unlocked"
+            locked_label = "Locked"
+
+        lines = [
+            f"**{level_label}: {level_range}**"
+        ]
+
+        for achievement_id, definition in tier_trophies:
+
+            unlocked = achievement_id in unlocked_ids
+
+            if language == "ar":
+                trophy_name = definition["name_ar"]
+                trophy_description = definition["description_ar"]
+                status = (
+                    f"✅ {unlocked_label}"
+                    if unlocked
+                    else f"🔒 {locked_label}"
+                )
+            else:
+                trophy_name = definition["name_en"]
+                trophy_description = definition["description_en"]
+                status = (
+                    f"✅ {unlocked_label}"
+                    if unlocked
+                    else f"🔒 {locked_label}"
+                )
+
+            minimum_level = int(
+                definition.get("min_level", 1)
+            )
+
+            if language == "ar":
+                requirement = (
+                    f"المستوى {minimum_level}+"
+                )
+            else:
+                requirement = (
+                    f"Level {minimum_level}+"
+                )
+
+            lines.append(
+                f"\n{status} **{trophy_name}**\n"
+                f"{trophy_description}\n"
+                f"<:blank:0> {required_label}: {requirement}"
+            )
+
+        embed.add_field(
+            name=field_name,
+            value="\n".join(lines),
+            inline=False,
+        )
+
+    embed.set_footer(
+        text="MHN ARCADE V3 • TROPHY COLLECTION"
+    )
 
     return embed
 
@@ -390,7 +531,7 @@ class V3MainMenuView(discord.ui.View):
                 embed.set_thumbnail(
                     url=character["image_url"]
                 )
-            
+
             embed.set_footer(
                 text="MHN ARCADE V3"
             )
@@ -444,56 +585,10 @@ class V3MainMenuView(discord.ui.View):
                 interaction.user.id
             )
 
-            unlocked_ids = {
-                item["achievement_id"]
-                for item in stats["achievements"]
-            }
-
-            embed = discord.Embed(
-                title=(
-                    "🏆 التروفي"
-                    if self.language == "ar"
-                    else "🏆 Trophy Collection"
-                ),
-                description=(
-                    f"**{len(unlocked_ids)}/{len(ACHIEVEMENTS)}** "
-                    + (
-                        "تروفيات مفتوحة"
-                        if self.language == "ar"
-                        else "trophies unlocked"
-                    )
-                ),
-                color=PURPLE,
+            embed = create_player_trophy_embed(
+                stats=stats,
+                language=self.language,
             )
-
-            for achievement_id, definition in ACHIEVEMENTS.items():
-
-                unlocked = achievement_id in unlocked_ids
-
-                if self.language == "ar":
-                    name = definition["name_ar"]
-                    description = definition["description_ar"]
-                    status = (
-                        "✅ مفتوح"
-                        if unlocked
-                        else "🔒 مقفول"
-                    )
-                else:
-                    name = definition["name_en"]
-                    description = definition["description_en"]
-                    status = (
-                        "✅ Unlocked"
-                        if unlocked
-                        else "🔒 Locked"
-                    )
-
-                embed.add_field(
-                    name=f"{status} • {name}",
-                    value=description,
-                    inline=False,
-                )
-
-            embed.set_footer(text="MHN ARCADE V3")
 
             await interaction.response.send_message(
                 embed=embed,
