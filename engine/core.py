@@ -1,3 +1,4 @@
+
 """
 MHN ARCADE V3 - Core Engine
 
@@ -20,7 +21,6 @@ import asyncio
 import inspect
 import secrets
 from enum import Enum
-
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
@@ -79,9 +79,7 @@ class GameSession:
     session_id: str
     guild_id: str
     game_id: str
-
     host_id: str
-
     min_players: int
     max_players: int
 
@@ -139,11 +137,15 @@ class SessionManager:
     Session listeners receive:
         callback(session, user_id, event)
 
-    Supported events:
-        disconnected
-        reconnected
-        surrendered
-        disconnect_expired
+    Lifecycle listeners receive:
+        callback(session, event)
+
+    Lifecycle events:
+        completed
+        cancelled
+
+    Completion listeners receive:
+        callback(session)
 
     Callbacks may be synchronous or asynchronous.
 
@@ -167,7 +169,6 @@ class SessionManager:
         self.repository = repository
 
         self._sessions: dict[str, GameSession] = {}
-
         self._user_sessions: dict[tuple[str, str], str] = {}
 
         self._disconnect_tasks: dict[
@@ -179,10 +180,19 @@ class SessionManager:
             str,
             set[Callable[[GameSession, str, str], Any]],
         ] = {}
-        
+
         self._completion_listeners: set[
             Callable[[GameSession], Any]
         ] = set()
+
+        # Generic lifecycle listeners, independent from achievements.
+        self._lifecycle_listeners: set[
+            Callable[[GameSession, str], Any]
+        ] = set()
+
+        # Prevent duplicate terminal notifications.
+        self._notified_terminal_sessions: set[str] = set()
+
         self._lock = asyncio.Lock()
 
     # =====================================================
@@ -195,7 +205,6 @@ class SessionManager:
     ) -> str | None:
         if value is None:
             return None
-
         return value.isoformat()
 
     @staticmethod
@@ -204,7 +213,6 @@ class SessionManager:
     ) -> datetime | None:
         if value is None:
             return None
-
         return datetime.fromisoformat(value)
 
     @classmethod
@@ -222,15 +230,9 @@ class SessionManager:
             "max_players": session.max_players,
             "status": session.status.value,
             "metadata": dict(session.metadata),
-            "created_at": cls._datetime_to_string(
-                session.created_at
-            ),
-            "started_at": cls._datetime_to_string(
-                session.started_at
-            ),
-            "finished_at": cls._datetime_to_string(
-                session.finished_at
-            ),
+            "created_at": cls._datetime_to_string(session.created_at),
+            "started_at": cls._datetime_to_string(session.started_at),
+            "finished_at": cls._datetime_to_string(session.finished_at),
             "players": {
                 user_id: {
                     "user_id": player.user_id,
@@ -304,25 +306,14 @@ class SessionManager:
                 cls._string_to_datetime(data.get("created_at"))
                 or datetime.now(timezone.utc)
             ),
-            started_at=cls._string_to_datetime(
-                data.get("started_at")
-            ),
-            finished_at=cls._string_to_datetime(
-                data.get("finished_at")
-            ),
+            started_at=cls._string_to_datetime(data.get("started_at")),
+            finished_at=cls._string_to_datetime(data.get("finished_at")),
         )
 
     async def _persist_session_unlocked(
         self,
         session: GameSession,
     ) -> None:
-        """
-        Persist a session while the manager lock is held.
-
-        Keeping the write ordered with state changes prevents
-        concurrent operations from saving stale snapshots.
-        """
-
         if self.repository is None:
             return
 
@@ -334,7 +325,6 @@ class SessionManager:
         self,
         session_id: str,
     ) -> None:
-
         if self.repository is None:
             return
 
@@ -347,17 +337,13 @@ class SessionManager:
     async def initialize(self) -> None:
         """
         Initialize SQLite storage and restore recoverable lobbies.
-
         Running, completed and cancelled sessions are not restored.
-        Running matches require game-specific state recovery, which
-        is intentionally not implemented here.
         """
 
         if self.repository is None:
             return
 
         await self.repository.initialize()
-
         stored_sessions = await self.repository.load_sessions()
 
         async with self._lock:
@@ -365,6 +351,7 @@ class SessionManager:
             self._user_sessions.clear()
             self._disconnect_tasks.clear()
             self._session_listeners.clear()
+            self._notified_terminal_sessions.clear()
 
             for stored_data in stored_sessions:
                 session_id = str(
@@ -372,14 +359,8 @@ class SessionManager:
                 )
 
                 try:
-                    session = self._deserialize_session(
-                        stored_data
-                    )
-                except (
-                    KeyError,
-                    TypeError,
-                    ValueError,
-                ):
+                    session = self._deserialize_session(stored_data)
+                except (KeyError, TypeError, ValueError):
                     if session_id:
                         await self._delete_persisted_session_unlocked(
                             session_id
@@ -411,8 +392,7 @@ class SessionManager:
                     continue
 
                 conflicting_user = any(
-                    (session.guild_id, user_id)
-                    in self._user_sessions
+                    (session.guild_id, user_id) in self._user_sessions
                     for user_id in session.players
                 )
 
@@ -455,7 +435,6 @@ class SessionManager:
         session_id: str,
         user_id: str,
     ) -> None:
-
         key = (session_id, user_id)
         task = self._disconnect_tasks.pop(key, None)
 
@@ -466,7 +445,6 @@ class SessionManager:
         self,
         session: GameSession,
     ) -> None:
-
         for user_id in list(session.players):
             key = (session.guild_id, user_id)
 
@@ -486,11 +464,7 @@ class SessionManager:
         user_id: str,
         event: str,
     ) -> None:
-        """
-        Notify listeners outside the manager lock.
-
-        Listener failures must not undo or block a session state change.
-        """
+        """Notify per-session listeners outside the manager lock."""
 
         async with self._lock:
             session = self._sessions.get(session_id)
@@ -507,8 +481,36 @@ class SessionManager:
 
                 if inspect.isawaitable(result):
                     await result
-
             except Exception:
+                continue
+
+    async def _notify_lifecycle(
+        self,
+        session: GameSession,
+        event: str,
+    ) -> None:
+        """
+        Notify generic lifecycle listeners exactly once per session.
+
+        This is independent from XP and achievement callbacks.
+        The callback runs outside the manager lock.
+        """
+
+        async with self._lock:
+            if session.session_id in self._notified_terminal_sessions:
+                return
+
+            self._notified_terminal_sessions.add(session.session_id)
+            listeners = tuple(self._lifecycle_listeners)
+
+        for callback in listeners:
+            try:
+                result = callback(session, event)
+
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                # A listener failure must not undo the session state.
                 continue
 
     # =====================================================
@@ -520,7 +522,6 @@ class SessionManager:
         session_id: str,
         callback: Callable[[GameSession, str, str], Any],
     ) -> None:
-
         if not callable(callback):
             raise SessionError("Session listener must be callable.")
 
@@ -539,9 +540,7 @@ class SessionManager:
         session_id: str,
         callback: Callable[[GameSession, str, str], Any],
     ) -> None:
-
         session_id = str(session_id)
-
         listeners = self._session_listeners.get(session_id)
 
         if listeners is None:
@@ -551,19 +550,60 @@ class SessionManager:
 
         if not listeners:
             self._session_listeners.pop(session_id, None)
-   
+
+    # =====================================================
+    # COMPLETION LISTENERS
+    # =====================================================
+
     def add_completion_listener(
         self,
         callback: Callable[[GameSession], Any],
     ) -> None:
-
         if not callable(callback):
             raise SessionError(
                 "Completion listener must be callable."
             )
 
         self._completion_listeners.add(callback)
-        
+
+    def remove_completion_listener(
+        self,
+        callback: Callable[[GameSession], Any],
+    ) -> None:
+        self._completion_listeners.discard(callback)
+
+    # =====================================================
+    # GENERIC LIFECYCLE LISTENERS
+    # =====================================================
+
+    def add_lifecycle_listener(
+        self,
+        callback: Callable[[GameSession, str], Any],
+    ) -> None:
+        """
+        Register a callback for every terminal session event.
+
+        Callback signature:
+            callback(session, event)
+
+        Events:
+            completed
+            cancelled
+        """
+
+        if not callable(callback):
+            raise SessionError(
+                "Lifecycle listener must be callable."
+            )
+
+        self._lifecycle_listeners.add(callback)
+
+    def remove_lifecycle_listener(
+        self,
+        callback: Callable[[GameSession, str], Any],
+    ) -> None:
+        self._lifecycle_listeners.discard(callback)
+
     # =====================================================
     # CREATE SESSION
     # =====================================================
@@ -683,10 +723,10 @@ class SessionManager:
 
         user_id = self._normalize_id(user_id)
         notify_surrender = False
+        cancelled_lobby = False
 
         async with self._lock:
             session = self._get_session_unlocked(session_id)
-
             player = session.players.get(user_id)
 
             if player is None:
@@ -705,6 +745,7 @@ class SessionManager:
                         session.host_id = next(iter(session.players))
                     else:
                         session.status = SessionStatus.CANCELLED
+                        session.finished_at = datetime.now(timezone.utc)
                         self._sessions.pop(session.session_id, None)
                         self._session_listeners.pop(
                             session.session_id,
@@ -715,13 +756,14 @@ class SessionManager:
                             session.session_id
                         )
 
-                        return session
+                        cancelled_lobby = True
 
-                await self._persist_session_unlocked(session)
+                if not cancelled_lobby:
+                    await self._persist_session_unlocked(session)
 
-                return session
+                result_session = session
 
-            if session.status == SessionStatus.RUNNING:
+            elif session.status == SessionStatus.RUNNING:
                 if player.status in (
                     PlayerStatus.ACTIVE,
                     PlayerStatus.DISCONNECTED,
@@ -737,16 +779,20 @@ class SessionManager:
                     notify_surrender = True
 
                 await self._persist_session_unlocked(session)
-
                 result_session = session
-
 
             else:
                 raise SessionError("This session is no longer active.")
 
-        if notify_surrender:
+        if cancelled_lobby:
+            await self._notify_lifecycle(
+                result_session,
+                "cancelled",
+            )
+
+        elif notify_surrender:
             await self._notify_session_listeners(
-                session.session_id,
+                result_session.session_id,
                 user_id,
                 "surrendered",
             )
@@ -763,7 +809,6 @@ class SessionManager:
         host_id: str | int,
         max_players: int,
     ) -> GameSession:
-        """Allow the lobby host to change the player limit."""
 
         host_id = self._normalize_id(host_id)
 
@@ -780,7 +825,6 @@ class SessionManager:
 
         async with self._lock:
             session = self._get_session_unlocked(session_id)
-
             self._require_host(session, host_id)
 
             if session.status != SessionStatus.LOBBY:
@@ -814,14 +858,12 @@ class SessionManager:
         host_id: str | int,
         target_id: str | int,
     ) -> GameSession:
-        """Allow the lobby host to remove a player."""
 
         host_id = self._normalize_id(host_id)
         target_id = self._normalize_id(target_id)
 
         async with self._lock:
             session = self._get_session_unlocked(session_id)
-
             self._require_host(session, host_id)
 
             if session.status != SessionStatus.LOBBY:
@@ -864,7 +906,6 @@ class SessionManager:
 
         async with self._lock:
             session = self._get_session_unlocked(session_id)
-
             self._require_host(session, user_id)
 
             if session.status != SessionStatus.LOBBY:
@@ -885,12 +926,13 @@ class SessionManager:
     # =====================================================
     # DISCONNECT HANDLING
     # =====================================================
-        
+
     async def mark_disconnected(
         self,
         session_id: str,
         user_id: str | int,
     ) -> GameSession:
+
         user_id = self._normalize_id(user_id)
 
         async with self._lock:
@@ -904,7 +946,9 @@ class SessionManager:
             player = session.players.get(user_id)
 
             if player is None:
-                raise SessionError("Player does not exist in this session.")
+                raise SessionError(
+                    "Player does not exist in this session."
+                )
 
             if player.status != PlayerStatus.ACTIVE:
                 raise SessionError("Player is not currently active.")
@@ -958,7 +1002,9 @@ class SessionManager:
             player = session.players.get(user_id)
 
             if player is None:
-                raise SessionError("Player does not exist in this session.")
+                raise SessionError(
+                    "Player does not exist in this session."
+                )
 
             if player.status == PlayerStatus.ACTIVE:
                 return True
@@ -1135,18 +1181,21 @@ class SessionManager:
 
             await self._persist_session_unlocked(session)
 
+        # Generic lifecycle event: independent from achievements.
+        await self._notify_lifecycle(session, "completed")
+
+        # Preserve the existing completion/achievement callbacks.
         for callback in tuple(self._completion_listeners):
             try:
                 result = callback(session)
 
                 if inspect.isawaitable(result):
                     await result
-
             except Exception:
                 continue
 
         return session
-        
+
     # =====================================================
     # CANCEL RUNNING SESSION
     # =====================================================
@@ -1175,7 +1224,9 @@ class SessionManager:
 
             await self._persist_session_unlocked(session)
 
-            return session
+        await self._notify_lifecycle(session, "cancelled")
+
+        return session
 
     # =====================================================
     # CANCEL LOBBY
@@ -1191,7 +1242,6 @@ class SessionManager:
 
         async with self._lock:
             session = self._get_session_unlocked(session_id)
-
             self._require_host(session, user_id)
 
             if session.status != SessionStatus.LOBBY:
@@ -1209,7 +1259,9 @@ class SessionManager:
                 session.session_id
             )
 
-            return session
+        await self._notify_lifecycle(session, "cancelled")
+
+        return session
 
     # =====================================================
     # GETTERS
