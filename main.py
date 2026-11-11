@@ -11,11 +11,15 @@ V3-first Discord application:
 - V3 trophies and player statistics
 - V3 player-card panel
 - Update announcements and ping utility
+- Automatic arcade message cleanup
 
-Legacy V2 gameplay commands and panels are not loaded here.
-Legacy database helpers are retained only where the existing
-V3 player-card workflow and saved-message manager still depend
-on them. Existing V2 files and data are not deleted.
+Message cleanup:
+- Member messages in Arabic and English arcade channels:
+  Delete 60 minutes after sending.
+- Finished game messages:
+  Shared 5-minute deletion scheduler for V3 game views.
+- Bot messages and persistent menus are exempt from
+  the automatic 60-minute member-message cleanup.
 
 Environment:
     DISCORD_TOKEN
@@ -24,12 +28,15 @@ Environment:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 
 import discord
 from discord import app_commands
 from discord.ext import commands
+
 from v3_dashboards import V3DashboardManager
 from database import (
     initialize_database,
@@ -53,8 +60,16 @@ if not TOKEN:
 ARABIC_ARCADE_CHANNEL_ID = 1567665645905121330
 ENGLISH_ARCADE_CHANNEL_ID = 1567700330433609910
 
+ARCADE_CHANNEL_IDS = {
+    ARABIC_ARCADE_CHANNEL_ID,
+    ENGLISH_ARCADE_CHANNEL_ID,
+}
+
 PLAYER_CARDS_CHANNEL_ID = 1567719418862112809
 ARCADE_NEWS_CHANNEL_ID = 1568381560279933049
+
+MEMBER_MESSAGE_DELETE_SECONDS = 60 * 60
+FINISHED_GAME_DELETE_SECONDS = 5 * 60
 
 PURPLE = 0x7C3AED
 VERSION = "V3"
@@ -73,6 +88,360 @@ logger = logging.getLogger("MHN_ARCADE")
 
 intents = discord.Intents.default()
 intents.members = True
+intents.message_content = True
+
+
+# ========================================================
+# ARCADE MESSAGE CLEANUP
+# ========================================================
+
+class ArcadeMessageCleanup:
+    """
+    Centralized message cleanup manager.
+
+    Member messages:
+        Deleted 60 minutes after creation.
+
+    Finished game messages:
+        Can be scheduled for deletion after 5 minutes
+        through schedule_game_message().
+
+    Only the Arabic and English arcade channels are managed.
+    """
+
+    def __init__(self, bot: commands.Bot) -> None:
+        self.bot = bot
+
+        self._tasks: dict[int, asyncio.Task] = {}
+        self._initialized = False
+
+    # ----------------------------------------------------
+    # CHANNEL VALIDATION
+    # ----------------------------------------------------
+
+    @staticmethod
+    def is_arcade_channel(channel_id: int) -> bool:
+        return channel_id in ARCADE_CHANNEL_IDS
+
+    # ----------------------------------------------------
+    # MESSAGE DELETION
+    # ----------------------------------------------------
+
+    async def delete_message(
+        self,
+        message: discord.Message,
+        reason: str = "Scheduled arcade cleanup",
+    ) -> bool:
+
+        if not self.is_arcade_channel(message.channel.id):
+            return False
+
+        try:
+            await message.delete()
+
+            logger.info(
+                "Deleted arcade message %s | Channel: %s | Reason: %s",
+                message.id,
+                message.channel.id,
+                reason,
+            )
+
+            return True
+
+        except discord.NotFound:
+            return True
+
+        except discord.Forbidden:
+            logger.error(
+                "Missing permission to delete message %s.",
+                message.id,
+            )
+
+        except discord.HTTPException:
+            logger.exception(
+                "Failed to delete arcade message %s.",
+                message.id,
+            )
+
+        return False
+
+    # ----------------------------------------------------
+    # SCHEDULED DELETION
+    # ----------------------------------------------------
+
+    def schedule_message_delete(
+        self,
+        message: discord.Message,
+        delay_seconds: int,
+        reason: str = "Scheduled arcade cleanup",
+    ) -> None:
+        """
+        Schedule one message for deletion.
+
+        If the same message already has a scheduled task,
+        the previous task is replaced.
+        """
+
+        if not self.is_arcade_channel(message.channel.id):
+            return
+
+        if message.id in self._tasks:
+            previous_task = self._tasks.pop(message.id)
+
+            if not previous_task.done():
+                previous_task.cancel()
+
+        task = asyncio.create_task(
+            self._delete_after_delay(
+                message=message,
+                delay_seconds=delay_seconds,
+                reason=reason,
+            )
+        )
+
+        self._tasks[message.id] = task
+
+    async def _delete_after_delay(
+        self,
+        message: discord.Message,
+        delay_seconds: int,
+        reason: str,
+    ) -> None:
+
+        message_id = message.id
+        current_task = asyncio.current_task()
+
+        try:
+            await asyncio.sleep(
+                max(0, delay_seconds)
+            )
+
+            await self.delete_message(
+                message,
+                reason=reason,
+            )
+
+        except asyncio.CancelledError:
+            raise
+
+        except Exception:
+            logger.exception(
+                "Unexpected cleanup error for message %s.",
+                message_id,
+            )
+
+        finally:
+            if self._tasks.get(message_id) is current_task:
+                self._tasks.pop(message_id, None)
+
+    # ----------------------------------------------------
+    # MEMBER MESSAGE CLEANUP
+    # ----------------------------------------------------
+
+    def schedule_member_message(
+        self,
+        message: discord.Message,
+    ) -> None:
+        """
+        Schedule a member message for deletion exactly
+        60 minutes after its creation time.
+        """
+
+        if not self.is_arcade_channel(message.channel.id):
+            return
+
+        if message.author.bot or message.webhook_id is not None:
+            return
+
+        delete_at = (
+            message.created_at
+            + timedelta(
+                seconds=MEMBER_MESSAGE_DELETE_SECONDS
+            )
+        )
+
+        now = datetime.now(timezone.utc)
+
+        remaining_seconds = (
+            delete_at - now
+        ).total_seconds()
+
+        self.schedule_message_delete(
+            message=message,
+            delay_seconds=max(
+                0,
+                int(remaining_seconds),
+            ),
+            reason="Member message reached 60-minute limit",
+        )
+
+    # ----------------------------------------------------
+    # FINISHED GAME MESSAGE CLEANUP
+    # ----------------------------------------------------
+
+    def schedule_game_message(
+        self,
+        message: discord.Message,
+    ) -> None:
+        """
+        Schedule a finished game message for deletion
+        5 minutes after the final result is displayed.
+
+        Active game messages must never use this method
+        until the game has actually ended.
+        """
+
+        self.schedule_message_delete(
+            message=message,
+            delay_seconds=FINISHED_GAME_DELETE_SECONDS,
+            reason="Finished game message reached 5-minute limit",
+        )
+
+    # ----------------------------------------------------
+    # MEMBER MESSAGE EVENT
+    # ----------------------------------------------------
+
+    async def on_message(
+        self,
+        message: discord.Message,
+    ) -> None:
+
+        if not self.is_arcade_channel(message.channel.id):
+            return
+
+        if message.author.bot or message.webhook_id is not None:
+            return
+
+        self.schedule_member_message(message)
+
+    # ----------------------------------------------------
+    # STARTUP HISTORY SCAN
+    # ----------------------------------------------------
+
+    async def initialize(self) -> None:
+        """
+        Scan both arcade channels after startup.
+
+        Old member messages:
+            Delete immediately if already 60 minutes old.
+
+        Recent member messages:
+            Resume their remaining deletion time.
+
+        Bot messages:
+            Always ignored.
+        """
+
+        if self._initialized:
+            return
+
+        self._initialized = True
+
+        logger.info(
+            "Initializing arcade message cleanup."
+        )
+
+        for channel_id in ARCADE_CHANNEL_IDS:
+            channel = self.bot.get_channel(channel_id)
+
+            if channel is None:
+                try:
+                    channel = await self.bot.fetch_channel(
+                        channel_id
+                    )
+
+                except (
+                    discord.NotFound,
+                    discord.Forbidden,
+                    discord.HTTPException,
+                ):
+                    logger.exception(
+                        "Could not access arcade channel %s.",
+                        channel_id,
+                    )
+                    continue
+
+            if not isinstance(channel, discord.TextChannel):
+                logger.error(
+                    "Arcade channel %s is not a text channel.",
+                    channel_id,
+                )
+                continue
+
+            logger.info(
+                "Scanning arcade channel: %s",
+                channel.name,
+            )
+
+            try:
+                async for message in channel.history(
+                    limit=None,
+                    oldest_first=True,
+                ):
+
+                    if message.author.bot:
+                        continue
+
+                    if message.webhook_id is not None:
+                        continue
+
+                    delete_at = (
+                        message.created_at
+                        + timedelta(
+                            seconds=MEMBER_MESSAGE_DELETE_SECONDS
+                        )
+                    )
+
+                    remaining_seconds = (
+                        delete_at
+                        - datetime.now(timezone.utc)
+                    ).total_seconds()
+
+                    if remaining_seconds <= 0:
+                        await self.delete_message(
+                            message,
+                            reason="Startup scan: message older than 60 minutes",
+                        )
+
+                    else:
+                        self.schedule_message_delete(
+                            message=message,
+                            delay_seconds=int(
+                                remaining_seconds
+                            ),
+                            reason="Member message reached 60-minute limit",
+                        )
+
+            except discord.Forbidden:
+                logger.error(
+                    "Missing permission to read history in channel %s.",
+                    channel_id,
+                )
+
+            except discord.HTTPException:
+                logger.exception(
+                    "Could not scan arcade channel %s.",
+                    channel_id,
+                )
+
+        logger.info(
+            "Arcade message cleanup initialization completed."
+        )
+
+    # ----------------------------------------------------
+    # SHUTDOWN
+    # ----------------------------------------------------
+
+    def shutdown(self) -> None:
+        for task in self._tasks.values():
+            if not task.done():
+                task.cancel()
+
+        self._tasks.clear()
+
+        logger.info(
+            "Arcade message cleanup tasks stopped."
+        )
 
 
 # ========================================================
@@ -88,17 +457,27 @@ class MHNArcadeBot(commands.Bot):
             activity=discord.Game(name="MHN ARCADE V3 🎮"),
         )
 
+        self.message_cleanup = ArcadeMessageCleanup(self)
+
     async def setup_hook(self) -> None:
         # Initialize the existing database and V3 profiles.
         initialize_database()
         initialize_player_profiles()
 
+        # Register the member-message cleanup listener.
+        self.add_listener(
+            self.message_cleanup.on_message,
+            "on_message",
+        )
+
         # Load V3. The extension creates bot.v3_runtime.
         await self.load_extension("v3_discord")
+
         self.v3_dashboards = V3DashboardManager(
             bot=self,
             runtime=self.v3_runtime,
         )
+
         await self.v3_dashboards.initialize()
 
         # Register persistent Arabic and English menus.
@@ -116,7 +495,9 @@ class MHNArcadeBot(commands.Bot):
             )
         )
 
-        self.add_view(V3PlayerCardPanelView())
+        self.add_view(
+            V3PlayerCardPanelView()
+        )
 
         synced = await self.tree.sync()
 
@@ -124,6 +505,10 @@ class MHNArcadeBot(commands.Bot):
             "Successfully synchronized %s V3 slash commands.",
             len(synced),
         )
+
+    async def close(self) -> None:
+        self.message_cleanup.shutdown()
+        await super().close()
 
 
 bot = MHNArcadeBot()
@@ -467,6 +852,9 @@ async def on_ready() -> None:
     logger.info("Servers: %s", len(bot.guilds))
     logger.info("Status: ONLINE")
     logger.info("=" * 45)
+
+    # Initialize cleanup once, including after reconnects.
+    await bot.message_cleanup.initialize()
 
     for guild in bot.guilds:
         try:
