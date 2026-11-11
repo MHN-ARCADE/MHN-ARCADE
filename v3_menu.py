@@ -226,7 +226,7 @@ def create_player_trophy_embed(
             lines.append(
                 f"\n{status} **{trophy_name}**\n"
                 f"{trophy_description}\n"
-                f"<:blank:0> {required_label}: {requirement}"
+                f"{required_label}: {requirement}"
             )
 
         embed.add_field(
