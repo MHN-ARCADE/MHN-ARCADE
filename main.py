@@ -30,7 +30,7 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
-
+from v3_dashboards import V3DashboardManager
 from database import (
     initialize_database,
     get_bot_message,
