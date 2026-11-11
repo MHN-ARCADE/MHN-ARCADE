@@ -20,16 +20,49 @@ from engine.i18n import resolve_language, t
 
 
 logger = logging.getLogger("mhn.arcade.v3.discord")
+
 ACHIEVEMENTS_CHANNEL_ID = 1567722630969303090
 PURPLE = 0x7C3AED
 GAMES_PER_PAGE = 4
 DESCRIPTION_LIMIT = 550
 
 
+# =========================================================
+# MESSAGE CLEANUP INTEGRATION
+# =========================================================
+
+def schedule_finished_game_message(
+    cleanup_manager,
+    message: discord.Message | None,
+) -> None:
+    """
+    Schedule a finished game message for deletion.
+
+    The cleanup manager is provided by main.py.
+    Persistent menus and catalog messages are never passed here.
+    """
+
+    if cleanup_manager is None or message is None:
+        return
+
+    try:
+        cleanup_manager.schedule_game_message(message)
+    except Exception:
+        logger.exception(
+            "Could not schedule finished game message for deletion."
+        )
+
+
+# =========================================================
+# HELPERS
+# =========================================================
+
 def safe_text(value: str, limit: int) -> str:
     value = str(value or "").strip()
+
     if len(value) <= limit:
         return value
+
     return value[:limit - 3] + "..."
 
 
@@ -37,10 +70,17 @@ async def send_error(
     interaction: discord.Interaction,
     message: str,
 ) -> None:
+
     if interaction.response.is_done():
-        await interaction.followup.send(message, ephemeral=True)
+        await interaction.followup.send(
+            message,
+            ephemeral=True,
+        )
     else:
-        await interaction.response.send_message(message, ephemeral=True)
+        await interaction.response.send_message(
+            message,
+            ephemeral=True,
+        )
 
 
 # =========================================================
@@ -68,6 +108,7 @@ def build_catalog_pages(
     ) // GAMES_PER_PAGE
 
     for page_index in range(0, len(games), GAMES_PER_PAGE):
+
         page_games = games[
             page_index:page_index + GAMES_PER_PAGE
         ]
@@ -81,13 +122,17 @@ def build_catalog_pages(
         )
 
         for game in page_games:
+
             mode_value = game.mode.value
 
             if language == "ar":
                 mode = {
                     "single_player": "لاعب واحد",
                     "multiplayer": "متعدد اللاعبين",
-                }.get(mode_value, mode_value.replace("_", " "))
+                }.get(
+                    mode_value,
+                    mode_value.replace("_", " "),
+                )
             else:
                 mode = mode_value.replace("_", " ").title()
 
@@ -119,9 +164,15 @@ def build_catalog_pages(
             )
 
         if language == "ar":
-            footer = f"MHN ARCADE V3 • الصفحة {page_number}/{total_pages}"
+            footer = (
+                f"MHN ARCADE V3 • الصفحة "
+                f"{page_number}/{total_pages}"
+            )
         else:
-            footer = f"MHN ARCADE V3 • Page {page_number}/{total_pages}"
+            footer = (
+                f"MHN ARCADE V3 • Page "
+                f"{page_number}/{total_pages}"
+            )
 
         embed.set_footer(text=footer)
         pages.append(embed)
@@ -146,13 +197,20 @@ def build_coin_flip_embed(
     )
 
     if result is None:
+
         embed.add_field(
             name=f"🎯 {t('coin_flip_result', language)}",
             value=t("coin_flip_waiting", language),
             inline=False,
         )
+
     else:
-        emoji = "🌕" if result.side == "heads" else "🌑"
+
+        emoji = (
+            "🌕"
+            if result.side == "heads"
+            else "🌑"
+        )
 
         side_key = (
             "coin_flip_heads"
@@ -162,14 +220,9 @@ def build_coin_flip_embed(
 
         side_name = t(side_key, language)
 
-        if language == "ar":
-            result_value = side_name
-        else:
-            result_value = side_name
-
         embed.add_field(
             name=f"{emoji} {t('coin_flip_result', language)}",
-            value=f"**{result_value}**",
+            value=f"**{side_name}**",
             inline=False,
         )
 
@@ -185,7 +238,10 @@ def build_coin_flip_embed(
         inline=True,
     )
 
-    embed.set_footer(text="MHN ARCADE V3 • Coin Flip")
+    embed.set_footer(
+        text="MHN ARCADE V3 • Coin Flip"
+    )
+
     return embed
 
 
@@ -202,11 +258,13 @@ def build_roulette_lobby_embed(
     player_lines = []
 
     for player in players:
+
         marker = (
             "👑"
             if str(player.user_id) == str(session.host_id)
             else "🎮"
         )
+
         player_lines.append(
             f"{marker} **{safe_text(player.username, 60)}**"
         )
@@ -265,10 +323,14 @@ def build_roulette_game_embed(
     )
 
     if state["finished"]:
+
         winner = state.get("winner")
 
         if state.get("is_draw"):
-            embed.description = t("roulette_draw", language)
+            embed.description = t(
+                "roulette_draw",
+                language,
+            )
 
         elif winner:
             embed.description = (
@@ -278,9 +340,13 @@ def build_roulette_game_embed(
             )
 
         else:
-            embed.description = t("roulette_ended", language)
+            embed.description = t(
+                "roulette_ended",
+                language,
+            )
 
     else:
+
         chooser_id = state.get("current_chooser_id")
 
         embed.description = (
@@ -291,7 +357,10 @@ def build_roulette_game_embed(
             f"{t('roulette_choose_player', language)}"
         )
 
-    remaining = state.get("remaining_players", [])
+    remaining = state.get(
+        "remaining_players",
+        [],
+    )
 
     remaining_text = "\n".join(
         f"🟢 <@{player['user_id']}>"
@@ -310,9 +379,13 @@ def build_roulette_game_embed(
         inline=False,
     )
 
-    eliminations = state.get("eliminations", [])
+    eliminations = state.get(
+        "eliminations",
+        [],
+    )
 
     if eliminations:
+
         recent = eliminations[-8:]
 
         history = "\n".join(
@@ -327,7 +400,10 @@ def build_roulette_game_embed(
             inline=False,
         )
 
-    embed.set_footer(text="MHN ARCADE V3 • Musical Roulette")
+    embed.set_footer(
+        text="MHN ARCADE V3 • Musical Roulette"
+    )
+
     return embed
 
 
@@ -352,13 +428,24 @@ class CatalogView(discord.ui.View):
         self.current_page = 0
         self.message = None
 
-        self.previous_button.label = t("previous", language)
-        self.next_button.label = t("next", language)
+        self.previous_button.label = t(
+            "previous",
+            language,
+        )
+
+        self.next_button.label = t(
+            "next",
+            language,
+        )
 
         self.update_buttons()
 
     def update_buttons(self) -> None:
-        self.previous_button.disabled = self.current_page <= 0
+
+        self.previous_button.disabled = (
+            self.current_page <= 0
+        )
+
         self.next_button.disabled = (
             self.current_page >= len(self.pages) - 1
         )
@@ -372,10 +459,12 @@ class CatalogView(discord.ui.View):
             self.owner_id is not None
             and interaction.user.id != self.owner_id
         ):
+
             await interaction.response.send_message(
                 t("owner_only", self.language),
                 ephemeral=True,
             )
+
             return False
 
         return True
@@ -450,6 +539,7 @@ class CoinFlipView(discord.ui.View):
         handler,
         owner_id: int,
         language: str = "en",
+        cleanup_manager=None,
     ) -> None:
 
         super().__init__(timeout=300)
@@ -457,6 +547,8 @@ class CoinFlipView(discord.ui.View):
         self.handler = handler
         self.owner_id = owner_id
         self.language = language
+        self.cleanup_manager = cleanup_manager
+
         self.message = None
         self.finished = False
 
@@ -471,10 +563,12 @@ class CoinFlipView(discord.ui.View):
     ) -> bool:
 
         if interaction.user.id != self.owner_id:
+
             await interaction.response.send_message(
                 t("owner_only", self.language),
                 ephemeral=True,
             )
+
             return False
 
         return True
@@ -491,13 +585,16 @@ class CoinFlipView(discord.ui.View):
     ) -> None:
 
         if self.finished:
+
             await interaction.response.send_message(
                 t("coin_flip_finished", self.language),
                 ephemeral=True,
             )
+
             return
 
         try:
+
             result = self.handler.flip()
 
             embed = build_coin_flip_embed(
@@ -512,7 +609,10 @@ class CoinFlipView(discord.ui.View):
             )
 
         except Exception:
-            logger.exception("Coin Flip action failed.")
+
+            logger.exception(
+                "Coin Flip action failed."
+            )
 
             await send_error(
                 interaction,
@@ -521,6 +621,9 @@ class CoinFlipView(discord.ui.View):
 
     async def on_timeout(self) -> None:
 
+        if self.finished:
+            return
+
         self.finished = True
 
         for item in self.children:
@@ -528,22 +631,35 @@ class CoinFlipView(discord.ui.View):
                 item.disabled = True
 
         if self.message is not None:
+
             try:
                 await self.message.edit(view=self)
             except discord.HTTPException:
                 pass
 
+            schedule_finished_game_message(
+                self.cleanup_manager,
+                self.message,
+            )
+
 
 # =========================================================
-# MUSICAL ROULETTE LOBBY VIEW
+# ROULETTE CAPACITY MODAL
 # =========================================================
-
 
 class RouletteCapacityModal(discord.ui.Modal):
     """Allows the lobby host to change the player capacity."""
 
-    def __init__(self, lobby_view, current_capacity: int):
-        super().__init__(title="Change Lobby Capacity")
+    def __init__(
+        self,
+        lobby_view,
+        current_capacity: int,
+    ):
+
+        super().__init__(
+            title="Change Lobby Capacity"
+        )
+
         self.lobby_view = lobby_view
 
         self.capacity = discord.ui.TextInput(
@@ -554,46 +670,76 @@ class RouletteCapacityModal(discord.ui.Modal):
             max_length=2,
             required=True,
         )
+
         self.add_item(self.capacity)
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(
+        self,
+        interaction: discord.Interaction,
+    ):
+
         try:
+
             session = await self.lobby_view.runtime.runner.lobbies.get(
                 self.lobby_view.session_id
             )
 
             if session is None:
+
                 await send_error(
                     interaction,
-                    t("roulette_unavailable", self.lobby_view.language),
+                    t(
+                        "roulette_unavailable",
+                        self.lobby_view.language,
+                    ),
                 )
+
                 return
 
             if str(interaction.user.id) != str(session.host_id):
+
                 await send_error(
                     interaction,
-                    t("roulette_host_only", self.lobby_view.language),
+                    t(
+                        "roulette_host_only",
+                        self.lobby_view.language,
+                    ),
                 )
+
                 return
 
             try:
-                capacity = int(self.capacity.value.strip())
+                capacity = int(
+                    self.capacity.value.strip()
+                )
             except ValueError:
-                await send_error(interaction, "Please enter a valid number.")
+
+                await send_error(
+                    interaction,
+                    "Please enter a valid number.",
+                )
+
                 return
 
             if not 3 <= capacity <= 30:
+
                 await send_error(
                     interaction,
                     "Capacity must be between 3 and 30 players.",
                 )
+
                 return
 
             if capacity < session.player_count:
+
                 await send_error(
                     interaction,
-                    f"There are already {session.player_count} players in this lobby.",
+                    (
+                        f"There are already "
+                        f"{session.player_count} players in this lobby."
+                    ),
                 )
+
                 return
 
             await self.lobby_view.runtime.runner.lobbies.set_capacity(
@@ -605,49 +751,77 @@ class RouletteCapacityModal(discord.ui.Modal):
             await self.lobby_view.refresh_public_message()
 
             await interaction.response.send_message(
-                f"✅ Lobby capacity updated to **{capacity} players**.",
+                (
+                    f"✅ Lobby capacity updated to "
+                    f"**{capacity} players**."
+                ),
                 ephemeral=True,
             )
 
         except Exception:
-            logger.exception("Lobby capacity update failed.")
-            await send_error(
-                interaction,
-                t("generic_error", self.lobby_view.language),
+
+            logger.exception(
+                "Lobby capacity update failed."
             )
 
+            await send_error(
+                interaction,
+                t(
+                    "generic_error",
+                    self.lobby_view.language,
+                ),
+            )
+
+
+# =========================================================
+# ROULETTE KICK VIEW
+# =========================================================
 
 class RouletteKickView(discord.ui.View):
     """Player selection for the lobby host."""
 
-    def __init__(self, lobby_view, session):
+    def __init__(
+        self,
+        lobby_view,
+        session,
+    ):
+
         super().__init__(timeout=120)
 
         self.lobby_view = lobby_view
         self.session_id = lobby_view.session_id
         self.host_id = str(session.host_id)
+
         self.page = 0
+
         self.players = [
-            player for player in session.players.values()
+            player
+            for player in session.players.values()
             if str(player.user_id) != self.host_id
         ]
 
         self.page_size = 25
+
         self.build_select()
 
     def build_select(self):
+
         self.clear_items()
 
         start = self.page * self.page_size
         end = start + self.page_size
+
         page_players = self.players[start:end]
 
         if page_players:
+
             options = [
                 discord.SelectOption(
                     label=str(player.username)[:100],
                     value=str(player.user_id),
-                    description=f"Player ID: {player.user_id}"[:100],
+                    description=(
+                        f"Player ID: {player.user_id}"
+                    )[:100],
                     emoji="🎮",
                 )
                 for player in page_players
@@ -664,34 +838,53 @@ class RouletteKickView(discord.ui.View):
             self.add_item(select)
 
         if self.page > 0:
+
             previous = discord.ui.Button(
                 label="Previous",
                 emoji="⬅️",
                 style=discord.ButtonStyle.secondary,
             )
+
             previous.callback = self.previous_page
             self.add_item(previous)
 
         if end < len(self.players):
+
             next_button = discord.ui.Button(
                 label="Next",
                 emoji="➡️",
                 style=discord.ButtonStyle.secondary,
             )
+
             next_button.callback = self.next_page
             self.add_item(next_button)
 
-    async def interaction_check(self, interaction):
+    async def interaction_check(
+        self,
+        interaction: discord.Interaction,
+    ) -> bool:
+
         if str(interaction.user.id) != self.host_id:
+
             await interaction.response.send_message(
-                t("roulette_host_only", self.lobby_view.language),
+                t(
+                    "roulette_host_only",
+                    self.lobby_view.language,
+                ),
                 ephemeral=True,
             )
+
             return False
+
         return True
 
-    async def select_player(self, interaction: discord.Interaction):
+    async def select_player(
+        self,
+        interaction: discord.Interaction,
+    ):
+
         try:
+
             target_id = interaction.data["values"][0]
 
             session = await self.lobby_view.runtime.runner.lobbies.get(
@@ -699,26 +892,38 @@ class RouletteKickView(discord.ui.View):
             )
 
             if session is None:
+
                 await interaction.response.send_message(
-                    t("roulette_unavailable", self.lobby_view.language),
+                    t(
+                        "roulette_unavailable",
+                        self.lobby_view.language,
+                    ),
                     ephemeral=True,
                 )
+
                 return
 
             if str(interaction.user.id) != str(session.host_id):
+
                 await interaction.response.send_message(
-                    t("roulette_host_only", self.lobby_view.language),
+                    t(
+                        "roulette_host_only",
+                        self.lobby_view.language,
+                    ),
                     ephemeral=True,
                 )
+
                 return
 
             target = session.get_player(target_id)
 
             if target is None:
+
                 await interaction.response.send_message(
                     "That player is no longer in the lobby.",
                     ephemeral=True,
                 )
+
                 return
 
             await self.lobby_view.runtime.runner.lobbies.kick(
@@ -730,27 +935,55 @@ class RouletteKickView(discord.ui.View):
             await self.lobby_view.refresh_public_message()
 
             await interaction.response.edit_message(
-                content=f"✅ **{target.username}** was removed from the lobby.",
+                content=(
+                    f"✅ **{target.username}** "
+                    f"was removed from the lobby."
+                ),
                 view=None,
             )
 
         except Exception:
-            logger.exception("Lobby kick failed.")
-            await send_error(
-                interaction,
-                t("generic_error", self.lobby_view.language),
+
+            logger.exception(
+                "Lobby kick failed."
             )
 
-    async def previous_page(self, interaction):
+            await send_error(
+                interaction,
+                t(
+                    "generic_error",
+                    self.lobby_view.language,
+                ),
+            )
+
+    async def previous_page(
+        self,
+        interaction: discord.Interaction,
+    ):
+
         self.page -= 1
         self.build_select()
-        await interaction.response.edit_message(view=self)
 
-    async def next_page(self, interaction):
+        await interaction.response.edit_message(
+            view=self,
+        )
+
+    async def next_page(
+        self,
+        interaction: discord.Interaction,
+    ):
+
         self.page += 1
         self.build_select()
-        await interaction.response.edit_message(view=self)
 
+        await interaction.response.edit_message(
+            view=self,
+        )
+
+
+# =========================================================
+# MUSICAL ROULETTE LOBBY VIEW
+# =========================================================
 
 class MusicalRouletteLobbyView(discord.ui.View):
     """Discord lobby controls for Musical Roulette."""
@@ -760,6 +993,7 @@ class MusicalRouletteLobbyView(discord.ui.View):
         runtime: V3Runtime,
         session_id: str,
         language: str = "en",
+        cleanup_manager=None,
     ) -> None:
 
         super().__init__(timeout=900)
@@ -767,16 +1001,34 @@ class MusicalRouletteLobbyView(discord.ui.View):
         self.runtime = runtime
         self.session_id = session_id
         self.language = language
+        self.cleanup_manager = cleanup_manager
+
         self.message = None
         self.closed = False
         self.superseded = False
 
-        self.join_button.label = t("roulette_join", language)
-        self.leave_button.label = t("roulette_leave", language)
-        self.start_button.label = t("roulette_start", language)
-        self.close_button.label = t("roulette_close", language)
+        self.join_button.label = t(
+            "roulette_join",
+            language,
+        )
+
+        self.leave_button.label = t(
+            "roulette_leave",
+            language,
+        )
+
+        self.start_button.label = t(
+            "roulette_start",
+            language,
+        )
+
+        self.close_button.label = t(
+            "roulette_close",
+            language,
+        )
 
     async def refresh_public_message(self):
+
         session = await self.runtime.runner.lobbies.get(
             self.session_id
         )
@@ -784,17 +1036,25 @@ class MusicalRouletteLobbyView(discord.ui.View):
         if self.message is None:
             return
 
-        if session is None or session.status.value != "lobby":
+        if (
+            session is None
+            or session.status.value != "lobby"
+        ):
+
             self.closed = True
 
             for item in self.children:
                 item.disabled = True
 
             await self.message.edit(
-                content=t("roulette_unavailable", self.language),
+                content=t(
+                    "roulette_unavailable",
+                    self.language,
+                ),
                 embed=None,
                 view=self,
             )
+
             return
 
         await self.message.edit(
@@ -805,22 +1065,34 @@ class MusicalRouletteLobbyView(discord.ui.View):
             view=self,
         )
 
-    async def refresh(self, interaction: discord.Interaction):
+    async def refresh(
+        self,
+        interaction: discord.Interaction,
+    ):
+
         session = await self.runtime.runner.lobbies.get(
             self.session_id
         )
 
-        if session is None or session.status.value != "lobby":
+        if (
+            session is None
+            or session.status.value != "lobby"
+        ):
+
             self.closed = True
 
             for item in self.children:
                 item.disabled = True
 
             await interaction.response.edit_message(
-                content=t("roulette_unavailable", self.language),
+                content=t(
+                    "roulette_unavailable",
+                    self.language,
+                ),
                 embed=None,
                 view=self,
             )
+
             return
 
         await interaction.response.edit_message(
@@ -831,23 +1103,37 @@ class MusicalRouletteLobbyView(discord.ui.View):
             view=self,
         )
 
-    async def host_only(self, interaction):
+    async def host_only(
+        self,
+        interaction: discord.Interaction,
+    ):
+
         session = await self.runtime.runner.lobbies.get(
             self.session_id
         )
 
         if session is None:
+
             await send_error(
                 interaction,
-                t("roulette_unavailable", self.language),
+                t(
+                    "roulette_unavailable",
+                    self.language,
+                ),
             )
+
             return None
 
         if str(interaction.user.id) != str(session.host_id):
+
             await send_error(
                 interaction,
-                t("roulette_host_only", self.language),
+                t(
+                    "roulette_host_only",
+                    self.language,
+                ),
             )
+
             return None
 
         return session
@@ -857,17 +1143,28 @@ class MusicalRouletteLobbyView(discord.ui.View):
         emoji="➕",
         style=discord.ButtonStyle.success,
     )
-    async def join_button(self, interaction, button):
+    async def join_button(
+        self,
+        interaction,
+        button,
+    ):
+
         try:
+
             await self.runtime.runner.lobbies.join(
                 session_id=self.session_id,
                 user_id=interaction.user.id,
                 username=interaction.user.display_name,
             )
+
             await self.refresh(interaction)
 
         except Exception:
-            logger.exception("Musical Roulette join failed.")
+
+            logger.exception(
+                "Musical Roulette join failed."
+            )
+
             await send_error(
                 interaction,
                 t("generic_error", self.language),
@@ -878,16 +1175,27 @@ class MusicalRouletteLobbyView(discord.ui.View):
         emoji="➖",
         style=discord.ButtonStyle.secondary,
     )
-    async def leave_button(self, interaction, button):
+    async def leave_button(
+        self,
+        interaction,
+        button,
+    ):
+
         try:
+
             await self.runtime.runner.lobbies.leave(
                 session_id=self.session_id,
                 user_id=interaction.user.id,
             )
+
             await self.refresh(interaction)
 
         except Exception:
-            logger.exception("Musical Roulette leave failed.")
+
+            logger.exception(
+                "Musical Roulette leave failed."
+            )
+
             await send_error(
                 interaction,
                 t("generic_error", self.language),
@@ -898,7 +1206,12 @@ class MusicalRouletteLobbyView(discord.ui.View):
         emoji="👥",
         style=discord.ButtonStyle.secondary,
     )
-    async def capacity_button(self, interaction, button):
+    async def capacity_button(
+        self,
+        interaction,
+        button,
+    ):
+
         session = await self.host_only(interaction)
 
         if session is None:
@@ -916,25 +1229,36 @@ class MusicalRouletteLobbyView(discord.ui.View):
         emoji="👢",
         style=discord.ButtonStyle.danger,
     )
-    async def kick_button(self, interaction, button):
+    async def kick_button(
+        self,
+        interaction,
+        button,
+    ):
+
         session = await self.host_only(interaction)
 
         if session is None:
             return
 
         players = [
-            player for player in session.players.values()
+            player
+            for player in session.players.values()
             if str(player.user_id) != str(session.host_id)
         ]
 
         if not players:
+
             await interaction.response.send_message(
                 "There are no players to remove.",
                 ephemeral=True,
             )
+
             return
 
-        view = RouletteKickView(self, session)
+        view = RouletteKickView(
+            self,
+            session,
+        )
 
         await interaction.response.send_message(
             "Select the player you want to remove:",
@@ -947,13 +1271,19 @@ class MusicalRouletteLobbyView(discord.ui.View):
         emoji="🚀",
         style=discord.ButtonStyle.primary,
     )
-    async def start_button(self, interaction, button):
+    async def start_button(
+        self,
+        interaction,
+        button,
+    ):
+
         session = await self.host_only(interaction)
 
         if session is None:
             return
 
         try:
+
             launch = await self.runtime.runner.start_multiplayer_game(
                 session_id=self.session_id,
                 host_id=interaction.user.id,
@@ -965,8 +1295,9 @@ class MusicalRouletteLobbyView(discord.ui.View):
                 )
 
             game_view = MusicalRouletteGameView(
-                launch.handler,
+                handler=launch.handler,
                 language=self.language,
+                cleanup_manager=self.cleanup_manager,
             )
 
             game_view.message = interaction.message
@@ -981,7 +1312,11 @@ class MusicalRouletteLobbyView(discord.ui.View):
             )
 
         except Exception:
-            logger.exception("Musical Roulette launch failed.")
+
+            logger.exception(
+                "Musical Roulette launch failed."
+            )
+
             await send_error(
                 interaction,
                 t("generic_error", self.language),
@@ -992,13 +1327,19 @@ class MusicalRouletteLobbyView(discord.ui.View):
         emoji="🔒",
         style=discord.ButtonStyle.danger,
     )
-    async def close_button(self, interaction, button):
+    async def close_button(
+        self,
+        interaction,
+        button,
+    ):
+
         session = await self.host_only(interaction)
 
         if session is None:
             return
 
         try:
+
             await self.runtime.runner.lobbies.close(
                 session_id=self.session_id,
                 host_id=interaction.user.id,
@@ -1010,30 +1351,52 @@ class MusicalRouletteLobbyView(discord.ui.View):
                 item.disabled = True
 
             await interaction.response.edit_message(
-                content=t("roulette_closed", self.language),
+                content=t(
+                    "roulette_closed",
+                    self.language,
+                ),
                 embed=None,
                 view=self,
             )
 
+            schedule_finished_game_message(
+                self.cleanup_manager,
+                interaction.message,
+            )
+
         except Exception:
-            logger.exception("Musical Roulette close failed.")
+
+            logger.exception(
+                "Musical Roulette close failed."
+            )
+
             await send_error(
                 interaction,
                 t("generic_error", self.language),
             )
 
     async def on_timeout(self):
-        if self.superseded:
+
+        if self.superseded or self.closed:
             return
+
+        self.closed = True
 
         for item in self.children:
             item.disabled = True
 
         if self.message is not None:
+
             try:
                 await self.message.edit(view=self)
             except discord.HTTPException:
                 pass
+
+            schedule_finished_game_message(
+                self.cleanup_manager,
+                self.message,
+            )
+
 
 # =========================================================
 # MUSICAL ROULETTE GAME VIEW
@@ -1046,14 +1409,19 @@ class MusicalRouletteGameView(discord.ui.View):
         self,
         handler,
         language: str = "en",
+        cleanup_manager=None,
     ) -> None:
 
         super().__init__(timeout=600)
 
         self.handler = handler
         self.language = language
+        self.cleanup_manager = cleanup_manager
+
         self.message = None
         self.superseded = False
+        self.finished = False
+
         self._build_target_buttons()
 
     def _build_target_buttons(self) -> None:
@@ -1066,9 +1434,11 @@ class MusicalRouletteGameView(discord.ui.View):
         try:
             targets = self.handler.get_available_targets()
         except Exception:
+
             logger.exception(
                 "Could not load Musical Roulette targets."
             )
+
             targets = ()
 
         for target in targets:
@@ -1104,10 +1474,15 @@ class MusicalRouletteGameView(discord.ui.View):
         chooser_id = self.handler.current_chooser_id
 
         if str(interaction.user.id) != str(chooser_id):
+
             await interaction.response.send_message(
-                t("roulette_wait_turn", self.language),
+                t(
+                    "roulette_wait_turn",
+                    self.language,
+                ),
                 ephemeral=True,
             )
+
             return False
 
         return True
@@ -1119,13 +1494,17 @@ class MusicalRouletteGameView(discord.ui.View):
     ) -> None:
 
         try:
+
             await self.handler.eliminate(
                 chooser_id=interaction.user.id,
                 target_id=target_id,
             )
 
             if self.handler.is_finished:
+
+                self.finished = True
                 self.superseded = True
+
                 await interaction.response.edit_message(
                     embed=build_roulette_game_embed(
                         self.handler,
@@ -1133,15 +1512,23 @@ class MusicalRouletteGameView(discord.ui.View):
                     ),
                     view=None,
                 )
+
+                schedule_finished_game_message(
+                    self.cleanup_manager,
+                    interaction.message,
+                )
+
                 return
 
             next_view = MusicalRouletteGameView(
-                self.handler,
+                handler=self.handler,
                 language=self.language,
+                cleanup_manager=self.cleanup_manager,
             )
 
             next_view.message = interaction.message
             self.superseded = True
+
             await interaction.response.edit_message(
                 embed=build_roulette_game_embed(
                     self.handler,
@@ -1151,6 +1538,7 @@ class MusicalRouletteGameView(discord.ui.View):
             )
 
         except Exception:
+
             logger.exception(
                 "Musical Roulette elimination failed."
             )
@@ -1161,16 +1549,26 @@ class MusicalRouletteGameView(discord.ui.View):
             )
 
     async def on_timeout(self) -> None:
-        if self.superseded:
+
+        if self.superseded or self.finished:
             return
+
+        self.finished = True
+
         for item in self.children:
             item.disabled = True
 
         if self.message is not None:
+
             try:
                 await self.message.edit(view=self)
             except discord.HTTPException:
                 pass
+
+            schedule_finished_game_message(
+                self.cleanup_manager,
+                self.message,
+            )
 
 
 # =========================================================
@@ -1188,6 +1586,14 @@ class V3Games(commands.Cog):
 
         self.bot = bot
         self.runtime = runtime
+
+        # Shared cleanup manager initialized by main.py.
+        self.cleanup_manager = getattr(
+            bot,
+            "message_cleanup",
+            None,
+        )
+
         self.runtime.achievement_announcement_callback = (
             self._announce_achievements
         )
@@ -1202,17 +1608,21 @@ class V3Games(commands.Cog):
         )
 
         if channel is None:
+
             try:
                 channel = await self.bot.fetch_channel(
                     ACHIEVEMENTS_CHANNEL_ID
                 )
             except discord.HTTPException:
+
                 logger.exception(
                     "Could not find the V3 achievements channel."
                 )
+
                 return
 
         for item in unlocked:
+
             user_id = item["user_id"]
             username = item["username"]
 
@@ -1241,6 +1651,7 @@ class V3Games(commands.Cog):
             )
 
             try:
+
                 await channel.send(
                     message,
                     allowed_mentions=discord.AllowedMentions(
@@ -1249,12 +1660,18 @@ class V3Games(commands.Cog):
                         everyone=False,
                     ),
                 )
+
             except discord.HTTPException:
+
                 logger.exception(
                     "Failed to announce achievement %s for player %s.",
                     item["achievement_id"],
                     user_id,
                 )
+
+    # -----------------------------------------------------
+    # GAME CATALOG
+    # -----------------------------------------------------
 
     @app_commands.command(
         name="arcade_v3",
@@ -1269,13 +1686,16 @@ class V3Games(commands.Cog):
         language = resolve_language(interaction)
 
         if interaction.guild is None:
+
             await interaction.response.send_message(
                 t("server_only", language),
                 ephemeral=True,
             )
+
             return
 
         try:
+
             self.runtime.require_initialized()
 
             games = self.runtime.runner.list_games()
@@ -1300,12 +1720,19 @@ class V3Games(commands.Cog):
             view.message = await interaction.original_response()
 
         except Exception:
-            logger.exception("V3 catalog command failed.")
+
+            logger.exception(
+                "V3 catalog command failed."
+            )
 
             await send_error(
                 interaction,
                 t("catalog_error", language),
             )
+
+    # -----------------------------------------------------
+    # COIN FLIP
+    # -----------------------------------------------------
 
     @app_commands.command(
         name="coin_flip",
@@ -1320,6 +1747,7 @@ class V3Games(commands.Cog):
         language = resolve_language(interaction)
 
         try:
+
             self.runtime.require_initialized()
 
             launch = await self.runtime.runner.prepare_single_player_game(
@@ -1337,25 +1765,33 @@ class V3Games(commands.Cog):
                 handler=launch.handler,
                 owner_id=interaction.user.id,
                 language=language,
+                cleanup_manager=self.cleanup_manager,
             )
 
+            # Public game message.
             await interaction.response.send_message(
                 embed=build_coin_flip_embed(
                     language=language,
                 ),
                 view=view,
-                ephemeral=True,
             )
 
             view.message = await interaction.original_response()
 
         except Exception:
-            logger.exception("V3 Coin Flip command failed.")
+
+            logger.exception(
+                "V3 Coin Flip command failed."
+            )
 
             await send_error(
                 interaction,
                 t("coin_flip_error", language),
             )
+
+    # -----------------------------------------------------
+    # MUSICAL ROULETTE
+    # -----------------------------------------------------
 
     @app_commands.command(
         name="musical_roulette",
@@ -1370,13 +1806,16 @@ class V3Games(commands.Cog):
         language = resolve_language(interaction)
 
         if interaction.guild is None:
+
             await interaction.response.send_message(
                 t("server_only", language),
                 ephemeral=True,
             )
+
             return
 
         try:
+
             self.runtime.require_initialized()
 
             session = await self.runtime.runner.create_multiplayer_lobby(
@@ -1390,6 +1829,7 @@ class V3Games(commands.Cog):
                 runtime=self.runtime,
                 session_id=session.session_id,
                 language=language,
+                cleanup_manager=self.cleanup_manager,
             )
 
             await interaction.response.send_message(
@@ -1403,6 +1843,7 @@ class V3Games(commands.Cog):
             view.message = await interaction.original_response()
 
         except Exception:
+
             logger.exception(
                 "Musical Roulette lobby creation failed."
             )
@@ -1423,6 +1864,7 @@ async def setup(bot: commands.Bot) -> None:
     runtime = V3Runtime()
 
     try:
+
         await runtime.initialize()
 
         cog = V3Games(
@@ -1439,6 +1881,7 @@ async def setup(bot: commands.Bot) -> None:
         )
 
     except Exception:
+
         await runtime.shutdown()
         raise
 
@@ -1453,8 +1896,13 @@ async def teardown(bot: commands.Bot) -> None:
     )
 
     if runtime is not None:
+
         await runtime.shutdown()
-        delattr(bot, "v3_runtime")
+
+        delattr(
+            bot,
+            "v3_runtime",
+        )
 
         logger.info(
             "MHN ARCADE V3 runtime shut down."
