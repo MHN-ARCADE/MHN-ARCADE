@@ -94,7 +94,7 @@ DEFAULT_GAMES: tuple[GameDefinition, ...] = (
         name_ar="الروليت الموسيقي",
         mode=GameMode.MULTIPLAYER,
         min_players=3,
-        max_players=12,
+        max_players=30,
         description_en=(
             "A multiplayer elimination game. "
             "The selected player chooses another player to eliminate. "
