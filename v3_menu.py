@@ -14,7 +14,8 @@ import logging
 import discord
 
 from engine.achievements import ACHIEVEMENTS
-
+from characters import get_character
+from database import get_selected_character
 
 logger = logging.getLogger("mhn.arcade.v3.menu")
 
@@ -374,9 +375,22 @@ class V3MainMenuView(discord.ui.View):
                     inline=True,
                 )
 
-            embed.set_thumbnail(
-                url=member.display_avatar.url
-            )
+selected = get_selected_character(
+    interaction.guild.id,
+    member.id
+)
+
+character = (
+    get_character(selected["character_id"])
+    if selected
+    else None
+)
+
+if character and character.get("image_url"):
+    embed.set_thumbnail(
+        url=character["image_url"]
+    )
+            
             embed.set_footer(
                 text="MHN ARCADE V3"
             )
