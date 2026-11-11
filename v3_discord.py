@@ -17,6 +17,7 @@ from discord.ext import commands
 
 from engine.runtime import V3Runtime
 from engine.i18n import resolve_language, t
+from engine.discord_messages import DiscordMessageLifecycle
 
 
 logger = logging.getLogger("mhn.arcade.v3.discord")
@@ -32,21 +33,29 @@ DESCRIPTION_LIMIT = 550
 # =========================================================
 
 def schedule_finished_game_message(
-    cleanup_manager,
+    lifecycle: DiscordMessageLifecycle | None,
     message: discord.Message | None,
+    session_id: str | None = None,
 ) -> None:
     """
-    Schedule a finished game message for deletion.
+    Schedule a finished game message through the shared lifecycle manager.
 
-    The cleanup manager is provided by main.py.
-    Persistent menus and catalog messages are never passed here.
+    The final Discord message must be displayed before calling this function.
     """
 
-    if cleanup_manager is None or message is None:
+    if lifecycle is None or message is None:
         return
 
     try:
-        cleanup_manager.schedule_game_message(message)
+
+        if session_id is not None:
+            lifecycle.finish_session(
+                session_id=session_id,
+                message=message,
+            )
+        else:
+            lifecycle.finish_message(message)
+
     except Exception:
         logger.exception(
             "Could not schedule finished game message for deletion."
@@ -1046,14 +1055,26 @@ class MusicalRouletteLobbyView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
 
-            await self.message.edit(
-                content=t(
-                    "roulette_unavailable",
-                    self.language,
-                ),
-                embed=None,
-                view=self,
-            )
+            try:
+                await self.message.edit(
+                    content=t(
+                        "roulette_unavailable",
+                        self.language,
+                    ),
+                    embed=None,
+                    view=self,
+                )
+
+                schedule_finished_game_message(
+                    self.cleanup_manager,
+                    self.message,
+                    self.session_id,
+                )
+
+            except discord.HTTPException:
+                logger.exception(
+                    "Could not update unavailable roulette lobby."
+                )
 
             return
 
@@ -1091,6 +1112,12 @@ class MusicalRouletteLobbyView(discord.ui.View):
                 ),
                 embed=None,
                 view=self,
+            )
+
+            schedule_finished_game_message(
+                self.cleanup_manager,
+                interaction.message,
+                self.session_id,
             )
 
             return
@@ -1362,6 +1389,7 @@ class MusicalRouletteLobbyView(discord.ui.View):
             schedule_finished_game_message(
                 self.cleanup_manager,
                 interaction.message,
+                self.session_id,
             )
 
         except Exception:
@@ -1389,13 +1417,17 @@ class MusicalRouletteLobbyView(discord.ui.View):
 
             try:
                 await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
-            schedule_finished_game_message(
-                self.cleanup_manager,
-                self.message,
-            )
+                schedule_finished_game_message(
+                    self.cleanup_manager,
+                    self.message,
+                    self.session_id,
+                )
+
+            except discord.HTTPException:
+                logger.exception(
+                    "Could not finalize timed-out roulette lobby."
+                )
 
 
 # =========================================================
@@ -1516,6 +1548,7 @@ class MusicalRouletteGameView(discord.ui.View):
                 schedule_finished_game_message(
                     self.cleanup_manager,
                     interaction.message,
+                    str(self.handler.session.session_id),
                 )
 
                 return
@@ -1561,14 +1594,22 @@ class MusicalRouletteGameView(discord.ui.View):
         if self.message is not None:
 
             try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
 
-            schedule_finished_game_message(
-                self.cleanup_manager,
-                self.message,
-            )
+                await self.message.edit(
+                    content="⏰ Musical Roulette has ended because the game timed out.",
+                    view=self,
+                )
+
+                schedule_finished_game_message(
+                    self.cleanup_manager,
+                    self.message,
+                    str(self.handler.session.session_id),
+                )
+
+            except discord.HTTPException:
+                logger.exception(
+                    "Could not finalize timed-out Musical Roulette game."
+                )
 
 
 # =========================================================
@@ -1587,11 +1628,21 @@ class V3Games(commands.Cog):
         self.bot = bot
         self.runtime = runtime
 
-        # Shared cleanup manager initialized by main.py.
-        self.cleanup_manager = getattr(
+        # The cleanup manager is created by main.py.
+        cleanup_manager = getattr(
             bot,
             "message_cleanup",
             None,
+        )
+
+        # Shared lifecycle manager for every V3 game.
+        self.message_lifecycle = DiscordMessageLifecycle(
+            cleanup_manager=cleanup_manager,
+        )
+
+        # Connect engine lifecycle events to Discord.
+        self.runtime.set_session_lifecycle_callback(
+            self.message_lifecycle.on_session_lifecycle
         )
 
         self.runtime.achievement_announcement_callback = (
@@ -1765,7 +1816,7 @@ class V3Games(commands.Cog):
                 handler=launch.handler,
                 owner_id=interaction.user.id,
                 language=language,
-                cleanup_manager=self.cleanup_manager,
+                cleanup_manager=self.message_lifecycle,
             )
 
             # Public game message.
@@ -1829,7 +1880,7 @@ class V3Games(commands.Cog):
                 runtime=self.runtime,
                 session_id=session.session_id,
                 language=language,
-                cleanup_manager=self.cleanup_manager,
+                cleanup_manager=self.message_lifecycle,
             )
 
             await interaction.response.send_message(
@@ -1841,6 +1892,12 @@ class V3Games(commands.Cog):
             )
 
             view.message = await interaction.original_response()
+
+            # Bind the public lobby message to its session.
+            self.message_lifecycle.bind_session_message(
+                session_id=session.session_id,
+                message=view.message,
+            )
 
         except Exception:
 
@@ -1875,6 +1932,7 @@ async def setup(bot: commands.Bot) -> None:
         await bot.add_cog(cog)
 
         bot.v3_runtime = runtime
+        bot.v3_message_lifecycle = cog.message_lifecycle
 
         logger.info(
             "MHN ARCADE V3 Discord extension loaded."
@@ -1888,6 +1946,20 @@ async def setup(bot: commands.Bot) -> None:
 
 async def teardown(bot: commands.Bot) -> None:
     """Cleanly shut down the V3 runtime."""
+
+    lifecycle = getattr(
+        bot,
+        "v3_message_lifecycle",
+        None,
+    )
+
+    if lifecycle is not None:
+        lifecycle.clear()
+
+        delattr(
+            bot,
+            "v3_message_lifecycle",
+        )
 
     runtime = getattr(
         bot,
