@@ -886,12 +886,11 @@ class SessionManager:
     # DISCONNECT HANDLING
     # =====================================================
         
-        async def mark_disconnected(
+    async def mark_disconnected(
         self,
         session_id: str,
         user_id: str | int,
     ) -> GameSession:
-
         user_id = self._normalize_id(user_id)
 
         async with self._lock:
