@@ -742,7 +742,7 @@ class SessionManager:
 
             else:
                 raise SessionError("This session is no longer active.")
-
+                MAX_MULTIPLAYER_PLAYERS = 30
         if notify_surrender:
             await self._notify_session_listeners(
                 session.session_id,
@@ -756,29 +756,91 @@ class SessionManager:
     # START SESSION
     # =====================================================
 
-    async def start(
+        async def set_lobby_capacity(
         self,
         session_id: str,
-        user_id: str | int,
+        host_id: str | int,
+        max_players: int,
     ) -> GameSession:
+        """Allow the lobby host to change the player limit."""
 
-        user_id = self._normalize_id(user_id)
+        host_id = self._normalize_id(host_id)
+
+        if (
+            not isinstance(max_players, int)
+            or isinstance(max_players, bool)
+        ):
+            raise SessionError("Player limit must be an integer.")
+
+        if not 1 <= max_players <= MAX_MULTIPLAYER_PLAYERS:
+            raise SessionError(
+                f"Player limit must be between 1 and "
+                f"{MAX_MULTIPLAYER_PLAYERS}."
+            )
 
         async with self._lock:
             session = self._get_session_unlocked(session_id)
 
-            self._require_host(session, user_id)
+            self._require_host(session, host_id)
 
             if session.status != SessionStatus.LOBBY:
-                raise SessionError("This session cannot be started.")
+                raise SessionError(
+                    "Player limit can only be changed in the lobby."
+                )
 
-            if session.player_count < session.min_players:
+            if max_players < session.min_players:
                 raise SessionError(
                     f"At least {session.min_players} players are required."
                 )
 
-            session.status = SessionStatus.RUNNING
-            session.started_at = datetime.now(timezone.utc)
+            if max_players < session.player_count:
+                raise SessionError(
+                    "Player limit cannot be lower than current players."
+                )
+
+            session.max_players = max_players
+
+            await self._persist_session_unlocked(session)
+
+            return session
+
+    async def kick_player(
+        self,
+        session_id: str,
+        host_id: str | int,
+        target_id: str | int,
+    ) -> GameSession:
+        """Allow the lobby host to remove a player."""
+
+        host_id = self._normalize_id(host_id)
+        target_id = self._normalize_id(target_id)
+
+        async with self._lock:
+            session = self._get_session_unlocked(session_id)
+
+            self._require_host(session, host_id)
+
+            if session.status != SessionStatus.LOBBY:
+                raise SessionError(
+                    "Players can only be kicked while the lobby is open."
+                )
+
+            if target_id == session.host_id:
+                raise SessionError(
+                    "The lobby host cannot kick themselves."
+                )
+
+            if target_id not in session.players:
+                raise SessionError(
+                    "That player is not in this lobby."
+                )
+
+            session.players.pop(target_id, None)
+
+            self._user_sessions.pop(
+                (session.guild_id, target_id),
+                None,
+            )
 
             await self._persist_session_unlocked(session)
 
