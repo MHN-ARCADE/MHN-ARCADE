@@ -538,6 +538,220 @@ class CoinFlipView(discord.ui.View):
 # MUSICAL ROULETTE LOBBY VIEW
 # =========================================================
 
+
+class RouletteCapacityModal(discord.ui.Modal):
+    """Allows the lobby host to change the player capacity."""
+
+    def __init__(self, lobby_view, current_capacity: int):
+        super().__init__(title="Change Lobby Capacity")
+        self.lobby_view = lobby_view
+
+        self.capacity = discord.ui.TextInput(
+            label="Maximum players (3–30)",
+            placeholder="Enter a number from 3 to 30",
+            default=str(current_capacity),
+            min_length=1,
+            max_length=2,
+            required=True,
+        )
+        self.add_item(self.capacity)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            session = await self.lobby_view.runtime.runner.lobbies.get(
+                self.lobby_view.session_id
+            )
+
+            if session is None:
+                await send_error(
+                    interaction,
+                    t("roulette_unavailable", self.lobby_view.language),
+                )
+                return
+
+            if str(interaction.user.id) != str(session.host_id):
+                await send_error(
+                    interaction,
+                    t("roulette_host_only", self.lobby_view.language),
+                )
+                return
+
+            try:
+                capacity = int(self.capacity.value.strip())
+            except ValueError:
+                await send_error(interaction, "Please enter a valid number.")
+                return
+
+            if not 3 <= capacity <= 30:
+                await send_error(
+                    interaction,
+                    "Capacity must be between 3 and 30 players.",
+                )
+                return
+
+            if capacity < session.player_count:
+                await send_error(
+                    interaction,
+                    f"There are already {session.player_count} players in this lobby.",
+                )
+                return
+
+            await self.lobby_view.runtime.runner.lobbies.set_capacity(
+                session_id=self.lobby_view.session_id,
+                host_id=interaction.user.id,
+                max_players=capacity,
+            )
+
+            await self.lobby_view.refresh_public_message()
+
+            await interaction.response.send_message(
+                f"✅ Lobby capacity updated to **{capacity} players**.",
+                ephemeral=True,
+            )
+
+        except Exception:
+            logger.exception("Lobby capacity update failed.")
+            await send_error(
+                interaction,
+                t("generic_error", self.lobby_view.language),
+            )
+
+
+class RouletteKickView(discord.ui.View):
+    """Player selection for the lobby host."""
+
+    def __init__(self, lobby_view, session):
+        super().__init__(timeout=120)
+
+        self.lobby_view = lobby_view
+        self.session_id = lobby_view.session_id
+        self.host_id = str(session.host_id)
+        self.page = 0
+        self.players = [
+            player for player in session.players.values()
+            if str(player.user_id) != self.host_id
+        ]
+
+        self.page_size = 25
+        self.build_select()
+
+    def build_select(self):
+        self.clear_items()
+
+        start = self.page * self.page_size
+        end = start + self.page_size
+        page_players = self.players[start:end]
+
+        if page_players:
+            options = [
+                discord.SelectOption(
+                    label=str(player.username)[:100],
+                    value=str(player.user_id),
+                    description=f"Player ID: {player.user_id}"[:100],
+                    emoji="🎮",
+                )
+                for player in page_players
+            ]
+
+            select = discord.ui.Select(
+                placeholder="Choose a player to remove",
+                min_values=1,
+                max_values=1,
+                options=options,
+            )
+
+            select.callback = self.select_player
+            self.add_item(select)
+
+        if self.page > 0:
+            previous = discord.ui.Button(
+                label="Previous",
+                emoji="⬅️",
+                style=discord.ButtonStyle.secondary,
+            )
+            previous.callback = self.previous_page
+            self.add_item(previous)
+
+        if end < len(self.players):
+            next_button = discord.ui.Button(
+                label="Next",
+                emoji="➡️",
+                style=discord.ButtonStyle.secondary,
+            )
+            next_button.callback = self.next_page
+            self.add_item(next_button)
+
+    async def interaction_check(self, interaction):
+        if str(interaction.user.id) != self.host_id:
+            await interaction.response.send_message(
+                t("roulette_host_only", self.lobby_view.language),
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def select_player(self, interaction: discord.Interaction):
+        try:
+            target_id = interaction.data["values"][0]
+
+            session = await self.lobby_view.runtime.runner.lobbies.get(
+                self.session_id
+            )
+
+            if session is None:
+                await interaction.response.send_message(
+                    t("roulette_unavailable", self.lobby_view.language),
+                    ephemeral=True,
+                )
+                return
+
+            if str(interaction.user.id) != str(session.host_id):
+                await interaction.response.send_message(
+                    t("roulette_host_only", self.lobby_view.language),
+                    ephemeral=True,
+                )
+                return
+
+            target = session.get_player(target_id)
+
+            if target is None:
+                await interaction.response.send_message(
+                    "That player is no longer in the lobby.",
+                    ephemeral=True,
+                )
+                return
+
+            await self.lobby_view.runtime.runner.lobbies.kick(
+                session_id=self.session_id,
+                host_id=interaction.user.id,
+                target_id=target_id,
+            )
+
+            await self.lobby_view.refresh_public_message()
+
+            await interaction.response.edit_message(
+                content=f"✅ **{target.username}** was removed from the lobby.",
+                view=None,
+            )
+
+        except Exception:
+            logger.exception("Lobby kick failed.")
+            await send_error(
+                interaction,
+                t("generic_error", self.lobby_view.language),
+            )
+
+    async def previous_page(self, interaction):
+        self.page -= 1
+        self.build_select()
+        await interaction.response.edit_message(view=self)
+
+    async def next_page(self, interaction):
+        self.page += 1
+        self.build_select()
+        await interaction.response.edit_message(view=self)
+
+
 class MusicalRouletteLobbyView(discord.ui.View):
     """Discord lobby controls for Musical Roulette."""
 
@@ -556,16 +770,42 @@ class MusicalRouletteLobbyView(discord.ui.View):
         self.message = None
         self.closed = False
         self.superseded = False
+
         self.join_button.label = t("roulette_join", language)
         self.leave_button.label = t("roulette_leave", language)
         self.start_button.label = t("roulette_start", language)
         self.close_button.label = t("roulette_close", language)
 
-    async def refresh(
-        self,
-        interaction: discord.Interaction,
-    ) -> None:
+    async def refresh_public_message(self):
+        session = await self.runtime.runner.lobbies.get(
+            self.session_id
+        )
 
+        if self.message is None:
+            return
+
+        if session is None or session.status.value != "lobby":
+            self.closed = True
+
+            for item in self.children:
+                item.disabled = True
+
+            await self.message.edit(
+                content=t("roulette_unavailable", self.language),
+                embed=None,
+                view=self,
+            )
+            return
+
+        await self.message.edit(
+            embed=build_roulette_lobby_embed(
+                session,
+                self.language,
+            ),
+            view=self,
+        )
+
+    async def refresh(self, interaction: discord.Interaction):
         session = await self.runtime.runner.lobbies.get(
             self.session_id
         )
@@ -591,29 +831,43 @@ class MusicalRouletteLobbyView(discord.ui.View):
             view=self,
         )
 
+    async def host_only(self, interaction):
+        session = await self.runtime.runner.lobbies.get(
+            self.session_id
+        )
+
+        if session is None:
+            await send_error(
+                interaction,
+                t("roulette_unavailable", self.language),
+            )
+            return None
+
+        if str(interaction.user.id) != str(session.host_id):
+            await send_error(
+                interaction,
+                t("roulette_host_only", self.language),
+            )
+            return None
+
+        return session
+
     @discord.ui.button(
         label="Join",
         emoji="➕",
         style=discord.ButtonStyle.success,
     )
-    async def join_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-
+    async def join_button(self, interaction, button):
         try:
             await self.runtime.runner.lobbies.join(
                 session_id=self.session_id,
                 user_id=interaction.user.id,
                 username=interaction.user.display_name,
             )
-
             await self.refresh(interaction)
 
         except Exception:
             logger.exception("Musical Roulette join failed.")
-
             await send_error(
                 interaction,
                 t("generic_error", self.language),
@@ -624,55 +878,79 @@ class MusicalRouletteLobbyView(discord.ui.View):
         emoji="➖",
         style=discord.ButtonStyle.secondary,
     )
-    async def leave_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-
+    async def leave_button(self, interaction, button):
         try:
             await self.runtime.runner.lobbies.leave(
                 session_id=self.session_id,
                 user_id=interaction.user.id,
             )
-
             await self.refresh(interaction)
 
         except Exception:
             logger.exception("Musical Roulette leave failed.")
-
             await send_error(
                 interaction,
                 t("generic_error", self.language),
             )
 
     @discord.ui.button(
+        label="Capacity",
+        emoji="👥",
+        style=discord.ButtonStyle.secondary,
+    )
+    async def capacity_button(self, interaction, button):
+        session = await self.host_only(interaction)
+
+        if session is None:
+            return
+
+        await interaction.response.send_modal(
+            RouletteCapacityModal(
+                self,
+                session.max_players,
+            )
+        )
+
+    @discord.ui.button(
+        label="Kick Player",
+        emoji="👢",
+        style=discord.ButtonStyle.danger,
+    )
+    async def kick_button(self, interaction, button):
+        session = await self.host_only(interaction)
+
+        if session is None:
+            return
+
+        players = [
+            player for player in session.players.values()
+            if str(player.user_id) != str(session.host_id)
+        ]
+
+        if not players:
+            await interaction.response.send_message(
+                "There are no players to remove.",
+                ephemeral=True,
+            )
+            return
+
+        view = RouletteKickView(self, session)
+
+        await interaction.response.send_message(
+            "Select the player you want to remove:",
+            view=view,
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
         label="Start Game",
         emoji="🚀",
         style=discord.ButtonStyle.primary,
     )
-    async def start_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-
-        session = await self.runtime.runner.lobbies.get(
-            self.session_id
-        )
+    async def start_button(self, interaction, button):
+        session = await self.host_only(interaction)
 
         if session is None:
-            await send_error(
-                interaction,
-                t("roulette_unavailable", self.language),
-            )
-            return
-
-        if str(interaction.user.id) != str(session.host_id):
-            await send_error(
-                interaction,
-                t("roulette_host_only", self.language),
-            )
             return
 
         try:
@@ -693,6 +971,7 @@ class MusicalRouletteLobbyView(discord.ui.View):
 
             game_view.message = interaction.message
             self.superseded = True
+
             await interaction.response.edit_message(
                 embed=build_roulette_game_embed(
                     launch.handler,
@@ -703,7 +982,6 @@ class MusicalRouletteLobbyView(discord.ui.View):
 
         except Exception:
             logger.exception("Musical Roulette launch failed.")
-
             await send_error(
                 interaction,
                 t("generic_error", self.language),
@@ -714,28 +992,10 @@ class MusicalRouletteLobbyView(discord.ui.View):
         emoji="🔒",
         style=discord.ButtonStyle.danger,
     )
-    async def close_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-
-        session = await self.runtime.runner.lobbies.get(
-            self.session_id
-        )
+    async def close_button(self, interaction, button):
+        session = await self.host_only(interaction)
 
         if session is None:
-            await send_error(
-                interaction,
-                t("roulette_unavailable", self.language),
-            )
-            return
-
-        if str(interaction.user.id) != str(session.host_id):
-            await send_error(
-                interaction,
-                t("roulette_host_only", self.language),
-            )
             return
 
         try:
@@ -757,13 +1017,12 @@ class MusicalRouletteLobbyView(discord.ui.View):
 
         except Exception:
             logger.exception("Musical Roulette close failed.")
-
             await send_error(
                 interaction,
                 t("generic_error", self.language),
             )
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         if self.superseded:
             return
 
@@ -775,7 +1034,6 @@ class MusicalRouletteLobbyView(discord.ui.View):
                 await self.message.edit(view=self)
             except discord.HTTPException:
                 pass
-
 
 # =========================================================
 # MUSICAL ROULETTE GAME VIEW
