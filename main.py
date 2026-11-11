@@ -94,12 +94,11 @@ class MHNArcadeBot(commands.Bot):
         initialize_player_profiles()
 
         # Load V3. The extension creates bot.v3_runtime.
-        await self.load_extension("v3_discord")
-self.v3_dashboards = V3DashboardManager(
-    bot=self,
-    runtime=self.v3_runtime,
-)
-await self.v3_dashboards.initialize()
+        self.v3_dashboards = V3DashboardManager(
+            bot=self,
+            runtime=self.v3_runtime,
+        )
+        await self.v3_dashboards.initialize()
 
         # Register persistent Arabic and English menus.
         self.add_view(
