@@ -740,9 +740,10 @@ class SessionManager:
 
                 result_session = session
 
+
             else:
                 raise SessionError("This session is no longer active.")
-                MAX_MULTIPLAYER_PLAYERS = 30
+
         if notify_surrender:
             await self._notify_session_listeners(
                 session.session_id,
@@ -753,10 +754,10 @@ class SessionManager:
         return result_session
 
     # =====================================================
-    # START SESSION
+    # LOBBY CAPACITY
     # =====================================================
 
-        async def set_lobby_capacity(
+    async def set_lobby_capacity(
         self,
         session_id: str,
         host_id: str | int,
@@ -772,10 +773,9 @@ class SessionManager:
         ):
             raise SessionError("Player limit must be an integer.")
 
-        if not 1 <= max_players <= MAX_MULTIPLAYER_PLAYERS:
+        if not 1 <= max_players <= 30:
             raise SessionError(
-                f"Player limit must be between 1 and "
-                f"{MAX_MULTIPLAYER_PLAYERS}."
+                "Player limit must be between 1 and 30."
             )
 
         async with self._lock:
@@ -803,6 +803,10 @@ class SessionManager:
             await self._persist_session_unlocked(session)
 
             return session
+
+    # =====================================================
+    # KICK PLAYER
+    # =====================================================
 
     async def kick_player(
         self,
@@ -847,10 +851,42 @@ class SessionManager:
             return session
 
     # =====================================================
-    # DISCONNECT HANDLING
+    # START SESSION
     # =====================================================
 
-    async def mark_disconnected(
+    async def start(
+        self,
+        session_id: str,
+        user_id: str | int,
+    ) -> GameSession:
+
+        user_id = self._normalize_id(user_id)
+
+        async with self._lock:
+            session = self._get_session_unlocked(session_id)
+
+            self._require_host(session, user_id)
+
+            if session.status != SessionStatus.LOBBY:
+                raise SessionError("This session cannot be started.")
+
+            if session.player_count < session.min_players:
+                raise SessionError(
+                    f"At least {session.min_players} players are required."
+                )
+
+            session.status = SessionStatus.RUNNING
+            session.started_at = datetime.now(timezone.utc)
+
+            await self._persist_session_unlocked(session)
+
+            return session
+
+    # =====================================================
+    # DISCONNECT HANDLING
+    # =====================================================
+        
+        async def mark_disconnected(
         self,
         session_id: str,
         user_id: str | int,
