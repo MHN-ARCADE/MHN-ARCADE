@@ -12,7 +12,14 @@ import io
 import os
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps, features
+from PIL import (
+    Image,
+    ImageDraw,
+    ImageFilter,
+    ImageFont,
+    ImageOps,
+    features,
+)
 
 
 CARD_WIDTH = 1200
@@ -190,7 +197,7 @@ def _glow(
     color: tuple[int, int, int],
     opacity: int = 28,
 ) -> None:
-    """Add a soft decorative glow without affecting supplied artwork."""
+    """Add a blurred ambient glow behind the card content."""
 
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     glow_draw = ImageDraw.Draw(overlay)
@@ -200,8 +207,9 @@ def _glow(
         fill=(*color, max(0, min(255, opacity))),
     )
 
+    # GaussianBlur is the correct Pillow filter for a soft glow.
     overlay = overlay.filter(
-        Image.Resampling.BICUBIC
+        ImageFilter.GaussianBlur(radius=75)
     )
 
     image.alpha_composite(overlay)
@@ -258,7 +266,6 @@ def _make_base(
 
     draw = ImageDraw.Draw(image)
 
-    # Outer premium frame.
     _rounded(
         draw,
         (22, 22, 1178, 698),
@@ -268,7 +275,6 @@ def _make_base(
         width=3,
     )
 
-    # Inner surface.
     _rounded(
         draw,
         (34, 34, 1166, 686),
@@ -278,7 +284,6 @@ def _make_base(
         width=1,
     )
 
-    # Thin rank accent at the top.
     _rounded(
         draw,
         (58, 48, 1142, 54),
@@ -286,7 +291,6 @@ def _make_base(
         fill=accent,
     )
 
-    # Small decorative corner details.
     draw.line(
         (58, 70, 58, 95),
         fill=accent,
@@ -299,6 +303,37 @@ def _make_base(
     )
 
     return image, draw, language, rank, accent
+
+
+def _load_image(
+    image_bytes: bytes | None,
+    box: tuple[int, int],
+    *,
+    contain: bool,
+) -> Image.Image | None:
+    if not image_bytes:
+        return None
+
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as source:
+            source.load()
+            result = source.convert("RGBA")
+
+        if contain:
+            result.thumbnail(
+                box,
+                Image.Resampling.LANCZOS,
+            )
+            return result
+
+        return ImageOps.fit(
+            result,
+            box,
+            method=Image.Resampling.LANCZOS,
+        )
+
+    except (OSError, ValueError):
+        return None
 
 
 def _paste_avatar(
@@ -339,47 +374,12 @@ def _paste_avatar(
     return True
 
 
-def _load_image(
-    image_bytes: bytes | None,
-    box: tuple[int, int],
-    *,
-    contain: bool,
-) -> Image.Image | None:
-    if not image_bytes:
-        return None
-
-    try:
-        with Image.open(io.BytesIO(image_bytes)) as source:
-            source.load()
-            result = source.convert("RGBA")
-
-        if contain:
-            result.thumbnail(
-                box,
-                Image.Resampling.LANCZOS,
-            )
-            return result
-
-        return ImageOps.fit(
-            result,
-            box,
-            method=Image.Resampling.LANCZOS,
-        )
-
-    except (OSError, ValueError):
-        return None
-
-
 def _paste_character(
     image: Image.Image,
     character_bytes: bytes | None,
     box: tuple[int, int, int, int],
 ) -> bool:
-    """
-    Place character artwork without cropping, tinting or filtering.
-
-    The original aspect ratio is preserved.
-    """
+    """Place character artwork without cropping or recoloring it."""
 
     x1, y1, x2, y2 = box
     width = x2 - x1
@@ -412,12 +412,7 @@ def _paste_character_or_avatar(
     avatar_bytes: bytes | None,
     box: tuple[int, int, int, int],
 ) -> str:
-    """
-    Prefer selected character artwork.
-
-    If the character image is unavailable or invalid,
-    use the member avatar instead.
-    """
+    """Use character artwork when available, otherwise member avatar."""
 
     if _paste_character(
         image,
@@ -625,11 +620,7 @@ def _draw_player_identity(
         language,
     )
 
-    portrait_box = (
-        (72, 151, 385, 405)
-        if xp_card
-        else (72, 151, 385, 405)
-    )
+    portrait_box = (72, 151, 385, 405)
 
     _draw_portrait_frame(
         draw,
@@ -750,12 +741,10 @@ def _draw_player_identity(
         int(data.get("level", 1)),
     )
 
-    level_label = f"LEVEL {level}"
-
     _draw_text(
         draw,
         (510, 369),
-        level_label,
+        f"LEVEL {level}",
         27,
         fill=accent,
         bold=True,
@@ -828,7 +817,6 @@ def render_xp_card_png(
         xp_card=True,
     )
 
-    # Elegant divider.
     draw.line(
         (72, 445, 1128, 445),
         fill=(59, 68, 98),
@@ -876,7 +864,6 @@ def render_xp_card_png(
         height=18,
     )
 
-    # Two balanced XP information panels.
     panels = [
         (
             (72, 585, 575, 646),
@@ -978,7 +965,6 @@ def render_player_card_png(
         xp_card=False,
     )
 
-    # Progression strip.
     draw.line(
         (72, 445, 1128, 445),
         fill=(59, 68, 98),
@@ -1039,9 +1025,7 @@ def render_player_card_png(
     _draw_text(
         draw,
         (1120, 536),
-        (
-            f"{current_xp:,} / {required_xp:,} XP"
-        ),
+        f"{current_xp:,} / {required_xp:,} XP",
         15,
         fill=MUTED,
         language="en",
@@ -1100,7 +1084,6 @@ def render_player_card_png(
             width=1,
         )
 
-        # Small rank-colored highlight.
         _rounded(
             draw,
             (x1 + 14, stat_y1 + 10, x1 + 42, stat_y1 + 13),
