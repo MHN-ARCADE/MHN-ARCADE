@@ -1,3 +1,4 @@
+
 """MHN ARCADE V3 - bilingual player-card workflow with PNG output."""
 
 from __future__ import annotations
@@ -14,11 +15,6 @@ from characters import (
     CATEGORY_NETFLIX,
     get_character,
     get_characters_by_category,
-)
-from database import (
-    create_player,
-    ensure_progress,
-    select_character,
 )
 from player_card_renderer import render_player_card_png
 from player_profiles_v3 import get_player_profile, save_player_profile
@@ -265,9 +261,6 @@ async def build_player_card_data(
         "win_rate": win_rate,
 
         "achievements": achievements_count,
-
-        # V3 currently does not expose best streak.
-        "best_streak": 0,
     }
 
     avatar_bytes, character_bytes = await asyncio.gather(
@@ -1010,32 +1003,14 @@ class CharacterChoiceSelect(discord.ui.Select):
 
             else:
 
-                create_player(
-                    guild.id,
-                    interaction.user.id,
-                    interaction.user.name,
-                )
-
-                ensure_progress(
-                    guild.id,
-                    interaction.user.id,
-                    self.language,
-                )
-
+                # Create or update the V3 profile only.
+                # No legacy V2 player/progress records are written.
                 save_player_profile(
                     guild.id,
                     interaction.user.id,
                     self.language,
                     character_id,
                 )
-
-            # Keep the legacy selected-character field synchronized.
-            # No XP, level, rank, wallet, or bank data is reset here.
-            select_character(
-                guild.id,
-                interaction.user.id,
-                character_id,
-            )
 
             profile = get_player_profile(
                 guild.id,
