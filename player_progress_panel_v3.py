@@ -118,6 +118,7 @@ def build_xp_card_data(
     return {
         "language": language,
         "player_name": member.display_name,
+        "username": member.name,
         "rank": str(progress["rank"]).upper(),
         "level": int(progress["level"]),
         "total_xp": int(progress["total_xp"]),
