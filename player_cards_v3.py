@@ -1,11 +1,12 @@
-
-"""MHN ARCADE V3 - bilingual player-card workflow."""
+"""MHN ARCADE V3 - bilingual player-card workflow with PNG output."""
 
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 
+import aiohttp
 import discord
 
 from characters import (
@@ -17,13 +18,9 @@ from characters import (
 from database import (
     create_player,
     ensure_progress,
-    get_achievement_count,
-    get_progress,
-    get_selected_character,
-    get_wallet,
     select_character,
-    xp_required_for_next_level,
 )
+from player_card_renderer import render_player_card_png
 from player_profiles_v3 import get_player_profile, save_player_profile
 
 logger = logging.getLogger("MHN_ARCADE.V3.PLAYER_CARDS")
@@ -31,199 +28,327 @@ logger = logging.getLogger("MHN_ARCADE.V3.PLAYER_CARDS")
 PLAYER_CARDS_CHANNEL_ID = 1567719418862112809
 ARABIC_ARCADE_CHANNEL_ID = 1567665645905121330
 ENGLISH_ARCADE_CHANNEL_ID = 1567700330433609910
+
 PURPLE = 0x7C3AED
-
-# Public player cards remain visible for 2 minutes and 30 seconds.
 PUBLIC_CARD_SECONDS = 150
-
-
-def rank_for_level(level: int) -> str:
-    if level >= 500:
-        return "MYTHIC"
-    if level >= 300:
-        return "GRANDMASTER"
-    if level >= 175:
-        return "MANAGER"
-    if level >= 100:
-        return "MASTER"
-    if level >= 50:
-        return "ELITE"
-    if level >= 25:
-        return "PRO"
-    if level >= 10:
-        return "APPRENTICE"
-    return "ROOKIE"
-
-
-def build_player_card_embed(
-    guild: discord.Guild,
-    member: discord.abc.User,
-    profile,
-    *,
-    public: bool = False
-) -> discord.Embed:
-
-    language = profile["profile_language"]
-    user_id = member.id
-
-    progress = get_progress(guild.id, user_id, language)
-
-    if progress is None:
-        ensure_progress(guild.id, user_id, language)
-        progress = get_progress(guild.id, user_id, language)
-
-    if progress is None:
-        raise RuntimeError("Could not load the player's progress track.")
-
-    level = int(progress["level"])
-    xp = int(progress["xp"])
-    next_xp = xp_required_for_next_level(level)
-
-    games = int(progress["games_played"])
-    wins = int(progress["wins"])
-    win_rate = (wins / games * 100) if games else 0.0
-
-    achievements = get_achievement_count(
-        guild.id,
-        user_id,
-        language
-    )
-
-    wallet = get_wallet(guild.id, user_id)
-
-    selected = get_selected_character(guild.id, user_id)
-    character = get_character(selected["character_id"]) if selected else None
-
-    if character:
-        character_name = (
-            character["name_ar"]
-            if language == "ar"
-            else character["name"]
-        )
-    else:
-        character_name = (
-            "لم يتم اختيار شخصية"
-            if language == "ar"
-            else "No character selected"
-        )
-
-    filled = min(10, int((xp / max(1, next_xp)) * 10))
-    bar = "🟪" * filled + "⬛" * (10 - filled)
-
-    if language == "ar":
-
-        embed = discord.Embed(
-            title="💜 بطاقة اللاعب",
-            description=(
-                f"**{discord.utils.escape_markdown(member.display_name)}**\n"
-                f"المعرّف: `{member.name}`\n"
-                f"الرتبة: **{rank_for_level(level)}**\n"
-                f"الشخصية: **{character_name}**"
-            ),
-            color=PURPLE,
-        )
-
-        fields = [
-            ("⭐ المستوى", str(level), True),
-            ("✨ XP", f"{xp:,} / {next_xp:,}", True),
-            ("🏅 الإنجازات", str(achievements), True),
-            ("📈 التقدم", bar, False),
-            ("🎮 المباريات", str(games), True),
-            ("🥇 الانتصارات", str(wins), True),
-            ("📊 نسبة الفوز", f"{win_rate:.1f}%", True),
-            ("🔥 أفضل سلسلة", str(progress["best_streak"]), True),
-            ("🪙 المحفظة", f"{wallet['coins']:,}", True),
-            ("🏦 البنك", f"{wallet['bank']:,}", True),
-            ("📚 إجمالي XP", f"{int(progress['lifetime_xp']):,}", True),
-        ]
-
-    else:
-
-        embed = discord.Embed(
-            title="💜 Player Card",
-            description=(
-                f"**{discord.utils.escape_markdown(member.display_name)}**\n"
-                f"Username: `{member.name}`\n"
-                f"Rank: **{rank_for_level(level)}**\n"
-                f"Character: **{character_name}**"
-            ),
-            color=PURPLE,
-        )
-
-        fields = [
-            ("⭐ Level", str(level), True),
-            ("✨ XP", f"{xp:,} / {next_xp:,}", True),
-            ("🏅 Achievements", str(achievements), True),
-            ("📈 Progress", bar, False),
-            ("🎮 Games Played", str(games), True),
-            ("🥇 Wins", str(wins), True),
-            ("📊 Win Rate", f"{win_rate:.1f}%", True),
-            ("🔥 Best Streak", str(progress["best_streak"]), True),
-            ("🪙 Wallet", f"{wallet['coins']:,}", True),
-            ("🏦 Bank", f"{wallet['bank']:,}", True),
-            ("📚 Lifetime XP", f"{int(progress['lifetime_xp']):,}", True),
-        ]
-
-    for name, value, inline in fields:
-        embed.add_field(name=name, value=value, inline=inline)
-
-    if character and character.get("image_url"):
-        embed.set_thumbnail(url=character["image_url"])
-
-    embed.set_footer(text="MHN ARCADE V3 • PLAYER PROFILE")
-
-    if public:
-        embed.description = (
-            (embed.description or "")
-            + "\n\n💜 MHN ARCADE PLAYER"
-        )
-
-    return embed
 
 
 async def _send_private_error(
     interaction: discord.Interaction,
-    message: str
-):
+    message: str,
+) -> None:
     if interaction.response.is_done():
-        await interaction.followup.send(
-            message,
-            ephemeral=True
-        )
+        await interaction.followup.send(message, ephemeral=True)
     else:
-        await interaction.response.send_message(
-            message,
-            ephemeral=True
+        await interaction.response.send_message(message, ephemeral=True)
+
+
+def _runtime_from_view(view: discord.ui.View):
+    """Find the V3 runtime attached to the XP button in the parent panel."""
+
+    runtime = getattr(view, "runtime", None)
+
+    if runtime is not None:
+        return runtime
+
+    for item in getattr(view, "children", ()):
+        runtime = getattr(item, "runtime", None)
+
+        if runtime is not None:
+            return runtime
+
+    return None
+
+
+async def _read_avatar(member: discord.abc.User) -> bytes | None:
+    try:
+        return await member.display_avatar.read()
+
+    except (discord.HTTPException, OSError):
+        logger.warning(
+            "Could not read avatar for %s.",
+            member.id,
+            exc_info=True,
         )
+        return None
+
+
+async def _read_character_image(character) -> bytes | None:
+    if not character:
+        return None
+
+    image_url = character.get("image_url")
+
+    if not image_url:
+        return None
+
+    timeout = aiohttp.ClientTimeout(total=12)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(image_url) as response:
+
+                if response.status != 200:
+                    return None
+
+                content_type = response.headers.get("Content-Type", "")
+
+                if not content_type.startswith("image/"):
+                    return None
+
+                image_bytes = await response.read()
+
+                if len(image_bytes) > 8 * 1024 * 1024:
+                    logger.warning(
+                        "Character image exceeds the 8 MB limit."
+                    )
+                    return None
+
+                return image_bytes
+
+    except (aiohttp.ClientError, asyncio.TimeoutError):
+        logger.warning(
+            "Could not download character artwork.",
+            exc_info=True,
+        )
+        return None
+
+
+async def build_player_card_data(
+    guild: discord.Guild,
+    member: discord.abc.User,
+    profile,
+    runtime,
+) -> tuple[dict, bytes | None, bytes | None]:
+
+    """
+    Build the player card using V3 profile and progression data.
+
+    This function does not read wallet, bank, coins,
+    or legacy V2 XP values.
+    """
+
+    if runtime is None:
+        raise RuntimeError("V3 runtime is not available.")
+
+    progression = getattr(runtime, "progression", None)
+
+    if progression is None:
+        raise RuntimeError("V3 progression manager is not available.")
+
+    language = (
+        "ar"
+        if str(profile["profile_language"]).lower() == "ar"
+        else "en"
+    )
+
+    progress = await progression.get_player_progress(
+        guild.id,
+        member.id,
+        member.display_name,
+    )
+
+    character = get_character(profile["character_id"])
+
+    if character:
+
+        if language == "ar":
+            character_name = (
+                character.get("name_ar")
+                or character.get("name")
+                or "غير محددة"
+            )
+        else:
+            character_name = (
+                character.get("name")
+                or character.get("name_ar")
+                or "Not selected"
+            )
+
+    else:
+        character_name = (
+            "غير محددة"
+            if language == "ar"
+            else "Not selected"
+        )
+
+    games = max(
+        0,
+        int(progress.get("games_played", 0)),
+    )
+
+    wins = max(
+        0,
+        int(progress.get("wins", 0)),
+    )
+
+    draws = max(
+        0,
+        int(progress.get("draws", 0)),
+    )
+
+    losses = max(
+        0,
+        int(
+            progress.get(
+                "losses",
+                max(0, games - wins - draws),
+            )
+        ),
+    )
+
+    win_rate = (
+        wins / games * 100
+        if games
+        else 0.0
+    )
+
+    achievements_count = 0
+
+    achievements_manager = getattr(
+        runtime,
+        "achievements",
+        None,
+    )
+
+    if achievements_manager is not None:
+
+        try:
+            achievement_data = (
+                await achievements_manager.get_player_stats(
+                    member.id
+                )
+            )
+
+            achievements_count = len(
+                achievement_data.get("achievements", [])
+            )
+
+        except Exception:
+            logger.warning(
+                "Could not load V3 achievements for user %s.",
+                member.id,
+                exc_info=True,
+            )
+
+    data = {
+        "language": language,
+        "player_name": member.display_name,
+        "username": member.name,
+
+        "rank": str(
+            progress.get("rank", "ROOKIE")
+        ).upper(),
+
+        "level": int(
+            progress.get("level", 1)
+        ),
+
+        "total_xp": int(
+            progress.get("total_xp", 0)
+        ),
+
+        "current_xp": int(
+            progress.get("xp", 0)
+        ),
+
+        "required_xp": max(
+            1,
+            int(progress.get("xp_to_next_level", 1)),
+        ),
+
+        "character_name": character_name,
+
+        "games": games,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": win_rate,
+
+        "achievements": achievements_count,
+
+        # V3 currently does not expose best streak.
+        "best_streak": 0,
+    }
+
+    avatar_bytes, character_bytes = await asyncio.gather(
+        _read_avatar(member),
+        _read_character_image(character),
+    )
+
+    return data, avatar_bytes, character_bytes
 
 
 async def publish_temporary_player_card(
     guild: discord.Guild,
     member: discord.abc.User,
-    profile
+    profile,
+    runtime,
 ) -> bool:
 
-    embed = build_player_card_embed(
-        guild,
-        member,
-        profile,
-        public=True
-    )
-
     try:
-        channel = guild.get_channel(PLAYER_CARDS_CHANNEL_ID)
+
+        data, avatar_bytes, character_bytes = (
+            await build_player_card_data(
+                guild,
+                member,
+                profile,
+                runtime,
+            )
+        )
+
+        png_bytes = render_player_card_png(
+            data,
+            avatar_bytes=avatar_bytes,
+            character_bytes=character_bytes,
+        )
+
+        channel = guild.get_channel(
+            PLAYER_CARDS_CHANNEL_ID
+        )
 
         if channel is None:
             channel = await guild.fetch_channel(
                 PLAYER_CARDS_CHANNEL_ID
             )
 
-        public_message = await channel.send(embed=embed)
+        if not isinstance(channel, discord.TextChannel):
+            logger.error(
+                "Player cards channel is not a text channel."
+            )
+            return False
 
-    except (discord.Forbidden, discord.HTTPException, AttributeError):
+        image_file = discord.File(
+            fp=io.BytesIO(png_bytes),
+            filename=f"player-card-{member.id}.png",
+        )
+
+        public_message = await channel.send(
+            file=image_file,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    except (
+        discord.Forbidden,
+        discord.HTTPException,
+        aiohttp.ClientError,
+        OSError,
+        ValueError,
+        RuntimeError,
+        KeyError,
+        TypeError,
+    ):
+
         logger.exception(
-            "Could not publish temporary player card for %s",
-            member.id
+            "Could not publish PNG player card for %s.",
+            member.id,
+        )
+        return False
+
+    except Exception:
+
+        logger.exception(
+            "Unexpected player-card error for %s.",
+            member.id,
         )
         return False
 
@@ -237,10 +362,13 @@ async def publish_temporary_player_card(
         except discord.NotFound:
             pass
 
-        except (discord.Forbidden, discord.HTTPException):
+        except (
+            discord.Forbidden,
+            discord.HTTPException,
+        ):
             logger.exception(
-                "Could not remove temporary public card for %s",
-                member.id
+                "Could not remove temporary public card for %s.",
+                member.id,
             )
 
     asyncio.create_task(remove_public_card())
@@ -262,19 +390,21 @@ class PlayerCardPanelView(discord.ui.View):
     async def open_player_card(
         self,
         interaction: discord.Interaction,
-        button: discord.ui.Button
+        button: discord.ui.Button,
     ):
 
         if interaction.guild is None:
             await _send_private_error(
                 interaction,
-                "Use this button inside the server."
+                "Use this button inside the server.",
             )
             return
 
+        runtime = _runtime_from_view(self)
+
         profile = get_player_profile(
             interaction.guild.id,
-            interaction.user.id
+            interaction.user.id,
         )
 
         language = (
@@ -287,7 +417,8 @@ class PlayerCardPanelView(discord.ui.View):
 
             view = ExistingPlayerCardView(
                 interaction.user.id,
-                language
+                language,
+                runtime,
             )
 
             await interaction.response.send_message(
@@ -305,29 +436,40 @@ class PlayerCardPanelView(discord.ui.View):
             embed = discord.Embed(
                 title="🎮 بطاقة اللاعب | Player Card",
                 description=(
-                    "ما عندك بطاقة لاعب للحين. أنشئ بطاقتك وابدأ رحلتك! 💜\n\n"
-                    "You don't have a player card yet. Create yours and start your journey! 💜"
+                    "ما عندك بطاقة لاعب للحين. "
+                    "أنشئ بطاقتك وابدأ رحلتك! 💜\n\n"
+                    "You don't have a player card yet. "
+                    "Create yours and start your journey! 💜"
                 ),
                 color=PURPLE,
             )
 
-            view = NewPlayerCardView(interaction.user.id)
+            view = NewPlayerCardView(
+                interaction.user.id,
+                runtime,
+            )
 
             await interaction.response.send_message(
                 embed=embed,
                 view=view,
-                ephemeral=True
+                ephemeral=True,
             )
 
 
 class ExistingPlayerCardView(discord.ui.View):
 
-    def __init__(self, owner_id: int, language: str):
+    def __init__(
+        self,
+        owner_id: int,
+        language: str,
+        runtime,
+    ):
 
         super().__init__(timeout=180)
 
         self.owner_id = owner_id
         self.language = language
+        self.runtime = runtime
 
         view_button = discord.ui.Button(
             label=(
@@ -336,7 +478,7 @@ class ExistingPlayerCardView(discord.ui.View):
                 else "View Player Card"
             ),
             emoji="👤",
-            style=discord.ButtonStyle.success
+            style=discord.ButtonStyle.success,
         )
 
         change_button = discord.ui.Button(
@@ -346,7 +488,7 @@ class ExistingPlayerCardView(discord.ui.View):
                 else "Change Character"
             ),
             emoji="🎭",
-            style=discord.ButtonStyle.primary
+            style=discord.ButtonStyle.primary,
         )
 
         view_button.callback = self.show_card
@@ -357,7 +499,7 @@ class ExistingPlayerCardView(discord.ui.View):
 
     async def interaction_check(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
     ) -> bool:
 
         if interaction.user.id != self.owner_id:
@@ -366,18 +508,30 @@ class ExistingPlayerCardView(discord.ui.View):
                 interaction,
                 "هذه القائمة ليست لك."
                 if self.language == "ar"
-                else "This menu is not yours."
+                else "This menu is not yours.",
             )
 
             return False
 
         return True
 
-    async def show_card(self, interaction: discord.Interaction):
+    async def show_card(
+        self,
+        interaction: discord.Interaction,
+    ):
+
+        if interaction.guild is None:
+            await _send_private_error(
+                interaction,
+                "استخدمها داخل السيرفر."
+                if self.language == "ar"
+                else "Use this inside the server.",
+            )
+            return
 
         profile = get_player_profile(
             interaction.guild.id,
-            interaction.user.id
+            interaction.user.id,
         )
 
         if profile is None:
@@ -386,21 +540,26 @@ class ExistingPlayerCardView(discord.ui.View):
                 interaction,
                 "لم تعد بطاقتك موجودة."
                 if self.language == "ar"
-                else "Your profile no longer exists."
+                else "Your profile no longer exists.",
             )
 
             return
 
+        await interaction.response.defer(
+            ephemeral=True
+        )
+
         published = await publish_temporary_player_card(
             interaction.guild,
             interaction.user,
-            profile
+            profile,
+            self.runtime,
         )
 
         if self.language == "ar":
 
             message = (
-                "💜 تم نشر بطاقة لاعبك للعامة لمدة دقيقتين و30 ثانية."
+                "💜 تم نشر بطاقة لاعبك كصورة لمدة دقيقتين و30 ثانية."
                 if published
                 else "تعذر نشر البطاقة الآن، حاول مرة ثانية."
             )
@@ -408,22 +567,26 @@ class ExistingPlayerCardView(discord.ui.View):
         else:
 
             message = (
-                "💜 Your player card is now public for 2 minutes and 30 seconds."
+                "💜 Your PNG player card is public for 2 minutes and 30 seconds."
                 if published
                 else "Could not publish your card right now. Please try again."
             )
 
-        await interaction.response.send_message(
-            content=message,
-            ephemeral=True
+        await interaction.followup.send(
+            message,
+            ephemeral=True,
         )
 
-    async def change_character(self, interaction: discord.Interaction):
+    async def change_character(
+        self,
+        interaction: discord.Interaction,
+    ):
 
         view = CharacterCategoryView(
             self.owner_id,
             self.language,
-            mode="change"
+            self.runtime,
+            mode="change",
         )
 
         title = (
@@ -443,35 +606,51 @@ class ExistingPlayerCardView(discord.ui.View):
             embed=discord.Embed(
                 title=f"🎭 {title}",
                 description=description,
-                color=PURPLE
+                color=PURPLE,
             ),
-            view=view
+            view=view,
         )
 
 
 class NewPlayerCardView(discord.ui.View):
 
-    def __init__(self, owner_id: int):
+    def __init__(
+        self,
+        owner_id: int,
+        runtime,
+    ):
 
         super().__init__(timeout=180)
 
         self.owner_id = owner_id
+        self.runtime = runtime
 
-        self.add_item(LanguageButton(owner_id, "ar"))
-        self.add_item(LanguageButton(owner_id, "en"))
+        self.add_item(
+            LanguageButton(
+                owner_id,
+                "ar",
+                runtime,
+            )
+        )
+
+        self.add_item(
+            LanguageButton(
+                owner_id,
+                "en",
+                runtime,
+            )
+        )
 
     async def interaction_check(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
     ) -> bool:
 
         if interaction.user.id != self.owner_id:
 
             await _send_private_error(
                 interaction,
-                "هذه القائمة ليست لك."
-                if interaction.locale.value.startswith("ar")
-                else "This menu is not yours."
+                "هذه القائمة ليست لك.",
             )
 
             return False
@@ -481,22 +660,40 @@ class NewPlayerCardView(discord.ui.View):
 
 class LanguageButton(discord.ui.Button):
 
-    def __init__(self, owner_id: int, language: str):
+    def __init__(
+        self,
+        owner_id: int,
+        language: str,
+        runtime,
+    ):
 
         self.owner_id = owner_id
         self.language = language
+        self.runtime = runtime
 
         super().__init__(
-            label="العربية" if language == "ar" else "English",
-            emoji="🇸🇦" if language == "ar" else "🇬🇧",
+            label=(
+                "العربية"
+                if language == "ar"
+                else "English"
+            ),
+            emoji=(
+                "🇸🇦"
+                if language == "ar"
+                else "🇬🇧"
+            ),
             style=discord.ButtonStyle.primary,
         )
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ):
 
         view = CharacterCategoryView(
             self.owner_id,
-            self.language
+            self.language,
+            self.runtime,
         )
 
         title = (
@@ -515,7 +712,7 @@ class LanguageButton(discord.ui.Button):
             embed=discord.Embed(
                 title=f"🎭 {title}",
                 description=description,
-                color=PURPLE
+                color=PURPLE,
             ),
             view=view,
         )
@@ -527,21 +724,24 @@ class CharacterCategoryView(discord.ui.View):
         self,
         owner_id: int,
         language: str,
-        mode: str = "create"
+        runtime,
+        mode: str = "create",
     ):
 
         super().__init__(timeout=180)
 
         self.owner_id = owner_id
         self.language = language
+        self.runtime = runtime
         self.mode = mode
 
         self.add_item(
             CharacterCategoryButton(
                 owner_id,
                 language,
+                runtime,
                 CATEGORY_ANIME,
-                mode
+                mode,
             )
         )
 
@@ -549,14 +749,15 @@ class CharacterCategoryView(discord.ui.View):
             CharacterCategoryButton(
                 owner_id,
                 language,
+                runtime,
                 CATEGORY_NETFLIX,
-                mode
+                mode,
             )
         )
 
     async def interaction_check(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
     ) -> bool:
 
         if interaction.user.id != self.owner_id:
@@ -565,7 +766,7 @@ class CharacterCategoryView(discord.ui.View):
                 interaction,
                 "هذه القائمة ليست لك."
                 if self.language == "ar"
-                else "This menu is not yours."
+                else "This menu is not yours.",
             )
 
             return False
@@ -579,12 +780,14 @@ class CharacterCategoryButton(discord.ui.Button):
         self,
         owner_id: int,
         language: str,
+        runtime,
         category: str,
-        mode: str = "create"
+        mode: str = "create",
     ):
 
         self.owner_id = owner_id
         self.language = language
+        self.runtime = runtime
         self.category = category
         self.mode = mode
 
@@ -607,12 +810,18 @@ class CharacterCategoryButton(discord.ui.Button):
         super().__init__(
             label=label,
             emoji=emoji,
-            style=discord.ButtonStyle.primary
+            style=discord.ButtonStyle.primary,
         )
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ):
 
-        characters = get_characters_by_category(self.category)
+        characters = get_characters_by_category(
+            self.category
+        )
+
         options = []
 
         for item in characters[:25]:
@@ -623,21 +832,22 @@ class CharacterCategoryButton(discord.ui.Button):
                 else item["name"]
             )
 
-            series = item["series"]
+            series = item.get("series", "")
 
             options.append(
                 discord.SelectOption(
                     label=label[:100],
                     value=item["id"],
-                    description=series[:100]
+                    description=series[:100],
                 )
             )
 
         view = CharacterChoiceView(
             self.owner_id,
             self.language,
+            self.runtime,
             options,
-            self.mode
+            self.mode,
         )
 
         title = (
@@ -654,7 +864,7 @@ class CharacterCategoryButton(discord.ui.Button):
                     if self.language == "ar"
                     else "Select a character from the list."
                 ),
-                color=PURPLE
+                color=PURPLE,
             ),
             view=view,
         )
@@ -666,28 +876,31 @@ class CharacterChoiceView(discord.ui.View):
         self,
         owner_id: int,
         language: str,
+        runtime,
         options,
-        mode: str = "create"
+        mode: str = "create",
     ):
 
         super().__init__(timeout=180)
 
         self.owner_id = owner_id
         self.language = language
+        self.runtime = runtime
         self.mode = mode
 
         self.add_item(
             CharacterChoiceSelect(
                 owner_id,
                 language,
+                runtime,
                 options,
-                mode
+                mode,
             )
         )
 
     async def interaction_check(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
     ) -> bool:
 
         if interaction.user.id != self.owner_id:
@@ -696,7 +909,7 @@ class CharacterChoiceView(discord.ui.View):
                 interaction,
                 "هذه القائمة ليست لك."
                 if self.language == "ar"
-                else "This menu is not yours."
+                else "This menu is not yours.",
             )
 
             return False
@@ -710,12 +923,14 @@ class CharacterChoiceSelect(discord.ui.Select):
         self,
         owner_id: int,
         language: str,
+        runtime,
         options,
-        mode: str = "create"
+        mode: str = "create",
     ):
 
         self.owner_id = owner_id
         self.language = language
+        self.runtime = runtime
         self.mode = mode
 
         super().__init__(
@@ -726,10 +941,13 @@ class CharacterChoiceSelect(discord.ui.Select):
             ),
             min_values=1,
             max_values=1,
-            options=options
+            options=options,
         )
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ):
 
         character_id = self.values[0]
         character = get_character(character_id)
@@ -740,7 +958,7 @@ class CharacterChoiceSelect(discord.ui.Select):
                 interaction,
                 "الشخصية غير موجودة."
                 if self.language == "ar"
-                else "Character not found."
+                else "Character not found.",
             )
 
             return
@@ -753,10 +971,14 @@ class CharacterChoiceSelect(discord.ui.Select):
                 interaction,
                 "استخدمها داخل السيرفر."
                 if self.language == "ar"
-                else "Use this inside the server."
+                else "Use this inside the server.",
             )
 
             return
+
+        await interaction.response.defer(
+            ephemeral=True
+        )
 
         try:
 
@@ -764,26 +986,26 @@ class CharacterChoiceSelect(discord.ui.Select):
 
                 profile = get_player_profile(
                     guild.id,
-                    interaction.user.id
+                    interaction.user.id,
                 )
 
                 if profile is None:
 
-                    await _send_private_error(
-                        interaction,
+                    await interaction.followup.send(
                         "بطاقتك غير موجودة، أنشئ بطاقة جديدة أولاً."
                         if self.language == "ar"
-                        else "Your profile was not found. Please create a card first."
+                        else "Your profile was not found. Please create a card first.",
+                        ephemeral=True,
                     )
 
                     return
 
-                # Preserve the existing profile language and V2 progress.
+                # Preserve the saved V3 language and progression.
                 save_player_profile(
                     guild.id,
                     interaction.user.id,
                     profile["profile_language"],
-                    character_id
+                    character_id,
                 )
 
             else:
@@ -791,38 +1013,40 @@ class CharacterChoiceSelect(discord.ui.Select):
                 create_player(
                     guild.id,
                     interaction.user.id,
-                    interaction.user.name
+                    interaction.user.name,
                 )
 
                 ensure_progress(
                     guild.id,
                     interaction.user.id,
-                    self.language
+                    self.language,
                 )
 
                 save_player_profile(
                     guild.id,
                     interaction.user.id,
                     self.language,
-                    character_id
+                    character_id,
                 )
 
-            # Save the selected character for the player card.
+            # Keep the legacy selected-character field synchronized.
+            # No XP, level, rank, wallet, or bank data is reset here.
             select_character(
                 guild.id,
                 interaction.user.id,
-                character_id
+                character_id,
             )
 
             profile = get_player_profile(
                 guild.id,
-                interaction.user.id
+                interaction.user.id,
             )
 
             published = await publish_temporary_player_card(
                 guild,
                 interaction.user,
-                profile
+                profile,
+                self.runtime,
             )
 
             if self.mode == "create":
@@ -862,11 +1086,14 @@ class CharacterChoiceSelect(discord.ui.Select):
                     await interaction.user.send(dm_text)
                     dm_sent = True
 
-                except (discord.Forbidden, discord.HTTPException):
+                except (
+                    discord.Forbidden,
+                    discord.HTTPException,
+                ):
 
                     logger.info(
                         "Could not DM player-card confirmation to %s",
-                        interaction.user.id
+                        interaction.user.id,
                     )
 
                 if published and dm_sent:
@@ -915,17 +1142,16 @@ class CharacterChoiceSelect(discord.ui.Select):
                         else "Your character was changed, but the card could not be published right now."
                     )
 
-            await interaction.response.edit_message(
-                content=result_message,
-                embed=None,
-                view=None
+            await interaction.followup.send(
+                result_message,
+                ephemeral=True,
             )
 
         except Exception:
 
             logger.exception(
                 "V3 player-card workflow failed for %s",
-                interaction.user.id
+                interaction.user.id,
             )
 
             error_message = (
@@ -934,16 +1160,7 @@ class CharacterChoiceSelect(discord.ui.Select):
                 else "Could not complete the action. Please try again."
             )
 
-            if interaction.response.is_done():
-
-                await interaction.followup.send(
-                    error_message,
-                    ephemeral=True
-                )
-
-            else:
-
-                await _send_private_error(
-                    interaction,
-                    error_message
-                )
+            await interaction.followup.send(
+                error_message,
+                ephemeral=True,
+            )
