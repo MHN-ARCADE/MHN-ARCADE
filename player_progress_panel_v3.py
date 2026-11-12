@@ -1,18 +1,20 @@
 
-"""MHN ARCADE V3 - Public XP card and profile language controls."""
+"""MHN ARCADE V3 - Public PNG XP card and profile language controls."""
 
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 
+import aiohttp
 import discord
 
 from characters import get_character
+from player_card_renderer import render_xp_card_png
 from player_cards_v3 import (
     PLAYER_CARDS_CHANNEL_ID,
     PlayerCardPanelView,
-    rank_for_level,
 )
 from player_profiles_v3 import (
     get_player_profile,
@@ -26,154 +28,106 @@ CARD_DURATION = 150
 ARABIC_ARCADE_CHANNEL_ID = 1567665645905121330
 ENGLISH_ARCADE_CHANNEL_ID = 1567700330433609910
 
-RANK_STYLE = {
-    "ROOKIE": (0x64748B, "مبتدئ"),
-    "APPRENTICE": (0x22C55E, "متدرب"),
-    "PRO": (0x3B82F6, "محترف"),
-    "ELITE": (0x06B6D4, "إيليت"),
-    "MASTER": (0xF59E0B, "ماستر"),
-    "MANAGER": (0xEF4444, "مانجر"),
-    "GRANDMASTER": (0xA855F7, "جراند ماستر"),
-    "MYTHIC": (0xF97316, "ميثيك"),
-}
+
+async def _read_character_image(character) -> bytes | None:
+    """Download the selected character artwork without modifying it."""
+
+    if not character:
+        return None
+
+    image_url = character.get("image_url")
+
+    if not image_url:
+        return None
+
+    timeout = aiohttp.ClientTimeout(total=12)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(image_url) as response:
+                if response.status != 200:
+                    return None
+
+                content_type = response.headers.get("Content-Type", "")
+
+                if not content_type.startswith("image/"):
+                    return None
+
+                image_bytes = await response.read()
+
+                # Avoid unexpectedly large remote image downloads.
+                if len(image_bytes) > 8 * 1024 * 1024:
+                    logger.warning(
+                        "Character image is too large: %s bytes",
+                        len(image_bytes),
+                    )
+                    return None
+
+                return image_bytes
+
+    except (aiohttp.ClientError, asyncio.TimeoutError):
+        logger.warning(
+            "Could not download selected character artwork.",
+            exc_info=True,
+        )
+        return None
 
 
-def build_xp_level_embed(
+async def _read_avatar(member: discord.abc.User) -> bytes | None:
+    """Read the member avatar for the PNG card."""
+
+    try:
+        return await member.display_avatar.read()
+
+    except (discord.HTTPException, OSError):
+        logger.warning(
+            "Could not read avatar for user %s.",
+            member.id,
+            exc_info=True,
+        )
+        return None
+
+
+def build_xp_card_data(
     member: discord.abc.User,
     profile,
     progress: dict,
-) -> discord.Embed:
-    """Build a bilingual-by-profile-language XP card."""
+    character,
+) -> dict:
+    """Build renderer input from the live V3 progression and profile."""
 
-    language = str(profile["profile_language"])
-    level = int(progress["level"])
-    current_xp = int(progress["xp"])
-    required_xp = max(1, int(progress["xp_to_next_level"]))
-    total_xp = int(progress["total_xp"])
-
-    rank = rank_for_level(level)
-    color, arabic_rank = RANK_STYLE.get(
-        rank,
-        RANK_STYLE["ROOKIE"],
+    language = (
+        "ar"
+        if str(profile["profile_language"]).lower() == "ar"
+        else "en"
     )
 
-    percentage = min(
-        100,
-        int(current_xp * 100 / required_xp),
-    )
-
-    filled = min(12, int(percentage * 12 / 100))
-    progress_bar = "▰" * filled + "▱" * (12 - filled)
-
-    character = get_character(profile["character_id"])
-
-    character_image = (
-        character.get("image_url")
-        if character
-        else None
-    )
-
-    if language == "ar":
+    if character:
         character_name = (
             character.get("name_ar") or character.get("name")
-            if character else "غير محددة"
+            if language == "ar"
+            else character.get("name") or character.get("name_ar")
         )
-
-        embed = discord.Embed(
-            title="⚡ بطاقة المستوى والخبرة",
-            description=(
-                f"{member.mention}\n"
-                f"**{discord.utils.escape_markdown(member.display_name)}**\n"
-                f"الرتبة الحالية: **{arabic_rank}**"
-            ),
-            color=color,
-        )
-
-        embed.add_field(
-            name="⭐ المستوى",
-            value=f"**LEVEL {level}**",
-            inline=True,
-        )
-        embed.add_field(
-            name="🏆 الرتبة",
-            value=f"**{arabic_rank}**",
-            inline=True,
-        )
-        embed.add_field(
-            name="📚 إجمالي XP",
-            value=f"**{total_xp:,}**",
-            inline=True,
-        )
-        embed.add_field(
-            name="📈 التقدم للمستوى القادم",
-            value=(
-                f"`{progress_bar}` **{percentage}%**\n"
-                f"**{current_xp:,} / {required_xp:,} XP**"
-            ),
-            inline=False,
-        )
-        embed.add_field(
-            name="🎭 الشخصية المختارة",
-            value=f"**{character_name}**",
-            inline=False,
-        )
-        embed.set_footer(
-            text="MHN ARCADE • رحلة التقدم مستمرة"
-        )
-
     else:
         character_name = (
-            character.get("name") or character.get("name_ar")
-            if character else "Not selected"
+            "غير محددة"
+            if language == "ar"
+            else "Not selected"
         )
 
-        embed = discord.Embed(
-            title="⚡ XP / LEVEL CARD",
-            description=(
-                f"{member.mention}\n"
-                f"**{discord.utils.escape_markdown(member.display_name)}**\n"
-                f"Current Rank: **{rank}**"
-            ),
-            color=color,
-        )
-
-        embed.add_field(
-            name="⭐ Level",
-            value=f"**LEVEL {level}**",
-            inline=True,
-        )
-        embed.add_field(
-            name="🏆 Rank",
-            value=f"**{rank}**",
-            inline=True,
-        )
-        embed.add_field(
-            name="📚 Total XP",
-            value=f"**{total_xp:,}**",
-            inline=True,
-        )
-        embed.add_field(
-            name="📈 Next Level Progress",
-            value=(
-                f"`{progress_bar}` **{percentage}%**\n"
-                f"**{current_xp:,} / {required_xp:,} XP**"
-            ),
-            inline=False,
-        )
-        embed.add_field(
-            name="🎭 Selected Character",
-            value=f"**{character_name}**",
-            inline=False,
-        )
-        embed.set_footer(
-            text="MHN ARCADE • YOUR JOURNEY CONTINUES"
-        )
-
-    # Keep the selected character image original and untouched.
-    if character_image:
-        embed.set_thumbnail(url=character_image)
-
-    return embed
+    return {
+        "language": language,
+        "player_name": member.display_name,
+        "rank": str(progress["rank"]).upper(),
+        "level": int(progress["level"]),
+        "total_xp": int(progress["total_xp"]),
+        "current_xp": int(progress["xp"]),
+        "required_xp": max(
+            1,
+            int(progress["xp_to_next_level"]),
+        ),
+        "character_name": character_name,
+    }
 
 
 async def publish_xp_card(
@@ -182,15 +136,29 @@ async def publish_xp_card(
     profile,
     progress: dict,
 ) -> bool:
-    """Publish the XP card publicly for 150 seconds."""
-
-    embed = build_xp_level_embed(
-        member,
-        profile,
-        progress,
-    )
+    """Publish the PNG XP card publicly for 150 seconds."""
 
     try:
+        character = get_character(profile["character_id"])
+
+        data = build_xp_card_data(
+            member,
+            profile,
+            progress,
+            character,
+        )
+
+        avatar_bytes, character_bytes = await asyncio.gather(
+            _read_avatar(member),
+            _read_character_image(character),
+        )
+
+        png_bytes = render_xp_card_png(
+            data,
+            avatar_bytes=avatar_bytes,
+            character_bytes=character_bytes,
+        )
+
         channel = guild.get_channel(PLAYER_CARDS_CHANNEL_ID)
 
         if channel is None:
@@ -199,17 +167,40 @@ async def publish_xp_card(
             )
 
         if not isinstance(channel, discord.TextChannel):
-            logger.error("Player cards channel is not a text channel.")
+            logger.error(
+                "Player cards channel is not a text channel."
+            )
             return False
 
+        image_file = discord.File(
+            fp=io.BytesIO(png_bytes),
+            filename=f"xp-card-{member.id}.png",
+        )
+
         message = await channel.send(
-            embed=embed,
+            file=image_file,
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    except (discord.Forbidden, discord.HTTPException):
+    except (
+        discord.Forbidden,
+        discord.HTTPException,
+        aiohttp.ClientError,
+        OSError,
+        ValueError,
+        RuntimeError,
+        KeyError,
+        TypeError,
+    ):
         logger.exception(
-            "Failed to publish XP card for user %s",
+            "Failed to publish XP PNG card for user %s",
+            member.id,
+        )
+        return False
+
+    except Exception:
+        logger.exception(
+            "Unexpected XP PNG card error for user %s",
             member.id,
         )
         return False
@@ -219,11 +210,13 @@ async def publish_xp_card(
 
         try:
             await message.delete()
+
         except discord.NotFound:
             pass
+
         except (discord.Forbidden, discord.HTTPException):
             logger.exception(
-                "Failed to delete XP card for user %s",
+                "Failed to delete XP PNG card for user %s",
                 member.id,
             )
 
@@ -257,6 +250,7 @@ async def send_missing_profile_notice(
             private_notice,
             ephemeral=True,
         )
+
     except discord.Forbidden:
         await interaction.followup.send(
             dm,
@@ -334,6 +328,7 @@ class LanguageChoiceButton(discord.ui.Button):
                 "ادخل وواصل اللعب!"
             )
             confirmation = "💜 تغيرت لغتك إلى العربية. أرسلت لك رسالة خاصة."
+
         else:
             dm = (
                 "💜 Your profile language is now English!\n"
@@ -349,6 +344,7 @@ class LanguageChoiceButton(discord.ui.Button):
                 confirmation,
                 ephemeral=True,
             )
+
         except discord.Forbidden:
             await interaction.followup.send(
                 f"{confirmation}\n\n{dm}",
@@ -365,7 +361,11 @@ class LanguageChoiceView(discord.ui.View):
         self.add_item(LanguageChoiceButton(owner_id, "ar"))
         self.add_item(LanguageChoiceButton(owner_id, "en"))
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(
+        self,
+        interaction: discord.Interaction,
+    ) -> bool:
+
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message(
                 "هذه القائمة ليست لك."
@@ -374,6 +374,7 @@ class LanguageChoiceView(discord.ui.View):
                 ephemeral=True,
             )
             return False
+
         return True
 
 
@@ -431,13 +432,14 @@ class XPLevelButton(discord.ui.Button):
 
             if profile["profile_language"] == "ar":
                 result = (
-                    "⚡ تم نشر بطاقة المستوى للجميع لمدة دقيقتين و30 ثانية."
+                    "⚡ تم نشر بطاقة المستوى كصورة للجميع لمدة دقيقتين و30 ثانية."
                     if published
                     else "تعذر نشر البطاقة الآن، حاول مرة ثانية."
                 )
+
             else:
                 result = (
-                    "⚡ Your XP card is public for 2 minutes and 30 seconds."
+                    "⚡ Your XP card PNG is public for 2 minutes and 30 seconds."
                     if published
                     else "Could not publish your XP card. Please try again."
                 )
@@ -452,6 +454,7 @@ class XPLevelButton(discord.ui.Button):
                 "XP card error for user %s",
                 interaction.user.id,
             )
+
             await interaction.followup.send(
                 "تعذر تحميل بيانات مستواك، حاول مرة ثانية."
                 if profile["profile_language"] == "ar"
