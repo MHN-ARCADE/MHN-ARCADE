@@ -14,12 +14,11 @@ import logging
 import discord
 
 from engine.achievements import ACHIEVEMENTS, TROPHY_TIERS
-from characters import get_character
-from database import get_selected_character
 
 logger = logging.getLogger("mhn.arcade.v3.menu")
 
 PURPLE = 0x7C3AED
+PLAYER_CARDS_CHANNEL_ID = 1567719418862112809
 
 
 # =========================================================
@@ -47,7 +46,7 @@ def create_main_menu_embed(
         )
         embed.add_field(
             name="👤 ملفي وإحصائياتي",
-            value="شوف مستواك ورتبتك وإحصائياتك.",
+            value="شوف بطاقتك ومستواك ورتبتك وإحصائياتك.",
             inline=False,
         )
         embed.add_field(
@@ -81,7 +80,7 @@ def create_main_menu_embed(
         )
         embed.add_field(
             name="👤 My Profile & Stats",
-            value="View your level, rank, and gaming statistics.",
+            value="View your player card, level, rank, and statistics.",
             inline=False,
         )
         embed.add_field(
@@ -365,7 +364,7 @@ class V3MainMenuView(discord.ui.View):
                 )
 
     # =====================================================
-    # PROFILE - PRIVATE
+    # PROFILE - DIRECT PLAYER CARDS CHANNEL LINK
     # =====================================================
 
     @discord.ui.button(
@@ -382,172 +381,51 @@ class V3MainMenuView(discord.ui.View):
     ) -> None:
 
         try:
-            self.runtime.require_initialized()
+            guild = interaction.guild
 
-            member = interaction.user
+            if guild is None:
+                message = (
+                    "هذا الزر يشتغل من داخل السيرفر فقط."
+                    if self.language == "ar"
+                    else "This button can only be used inside the server."
+                )
 
-            progress = await self.runtime.progression.get_player_progress(
-                interaction.guild.id,
-                member.id,
-                member.display_name,
+                await interaction.response.send_message(
+                    message,
+                    ephemeral=True,
+                )
+                return
+
+            channel_url = (
+                f"https://discord.com/channels/"
+                f"{guild.id}/{PLAYER_CARDS_CHANNEL_ID}"
             )
-
-            stats = await self.runtime.achievements.get_player_stats(
-                member.id
-            )
-
-            level = progress["level"]
-            total_xp = progress["total_xp"]
-            current_xp = progress["xp"]
-            next_level_xp = progress["xp_to_next_level"]
-            rank = progress["rank"]
-
-            games_played = progress["games_played"]
-            wins = progress["wins"]
-            losses = progress["losses"]
-            draws = progress["draws"]
-
-            multiplayer_games = stats["multiplayer_games"]
-            trophies = len(stats["achievements"])
 
             if self.language == "ar":
-                embed = discord.Embed(
-                    title="👤 ملف اللاعب",
-                    description=(
-                        f"**اللاعب:** {member.mention}\n"
-                        f"**الرتبة:** {rank}\n"
-                        f"**المستوى:** {level}\n"
-                        "إحصائياتك في MHN ARCADE V3"
-                    ),
-                    color=PURPLE,
+                message = (
+                    "💜 **بطاقات اللاعبين والإحصائيات**\n"
+                    "تقدر تشوف بطاقة لاعبك وإحصائياتك من القناة التالية:\n"
+                    f"👉 [افتح قناة بطاقات اللاعبين]({channel_url})"
                 )
-
-                embed.add_field(
-                    name="⭐ مجموع XP",
-                    value=f"{total_xp:,}",
-                    inline=True,
-                )
-                embed.add_field(
-                    name="📈 تقدم المستوى",
-                    value=f"{current_xp:,} / {next_level_xp:,}",
-                    inline=True,
-                )
-                embed.add_field(
-                    name="🎮 الألعاب المكتملة",
-                    value=str(games_played),
-                    inline=True,
-                )
-                embed.add_field(
-                    name="🏆 الانتصارات",
-                    value=str(wins),
-                    inline=True,
-                )
-                embed.add_field(
-                    name="❌ الخسائر",
-                    value=str(losses),
-                    inline=True,
-                )
-                embed.add_field(
-                    name="🤝 التعادلات",
-                    value=str(draws),
-                    inline=True,
-                )
-                embed.add_field(
-                    name="👥 الألعاب الجماعية",
-                    value=str(multiplayer_games),
-                    inline=True,
-                )
-                embed.add_field(
-                    name="💎 التروفيات المفتوحة",
-                    value=str(trophies),
-                    inline=True,
-                )
-
             else:
-                embed = discord.Embed(
-                    title="👤 Player Profile",
-                    description=(
-                        f"**Player:** {member.mention}\n"
-                        f"**Rank:** {rank}\n"
-                        f"**Level:** {level}\n"
-                        "Your MHN ARCADE V3 statistics."
-                    ),
-                    color=PURPLE,
+                message = (
+                    "💜 **Player Cards & Statistics**\n"
+                    "View your player card and gaming statistics in the channel below:\n"
+                    f"👉 [Open Player Cards Channel]({channel_url})"
                 )
-
-                embed.add_field(
-                    name="⭐ Total XP",
-                    value=f"{total_xp:,}",
-                    inline=True,
-                )
-                embed.add_field(
-                    name="📈 Level Progress",
-                    value=f"{current_xp:,} / {next_level_xp:,}",
-                    inline=True,
-                )
-                embed.add_field(
-                    name="🎮 Games Completed",
-                    value=str(games_played),
-                    inline=True,
-                )
-                embed.add_field(
-                    name="🏆 Wins",
-                    value=str(wins),
-                    inline=True,
-                )
-                embed.add_field(
-                    name="❌ Losses",
-                    value=str(losses),
-                    inline=True,
-                )
-                embed.add_field(
-                    name="🤝 Draws",
-                    value=str(draws),
-                    inline=True,
-                )
-                embed.add_field(
-                    name="👥 Multiplayer Games",
-                    value=str(multiplayer_games),
-                    inline=True,
-                )
-                embed.add_field(
-                    name="💎 Trophies Unlocked",
-                    value=str(trophies),
-                    inline=True,
-                )
-
-            selected = get_selected_character(
-                interaction.guild.id,
-                member.id
-            )
-
-            character = (
-                get_character(selected["character_id"])
-                if selected
-                else None
-            )
-
-            if character and character.get("image_url"):
-                embed.set_thumbnail(
-                    url=character["image_url"]
-                )
-
-            embed.set_footer(
-                text="MHN ARCADE V3"
-            )
 
             await interaction.response.send_message(
-                embed=embed,
+                message,
                 ephemeral=True,
             )
 
         except Exception:
-            logger.exception("Main menu player profile failed.")
+            logger.exception("Main menu player cards link failed.")
 
             message = (
-                "ما قدرنا نعرض ملفك الحين، حاول مرة ثانية."
+                "ما قدرنا نفتح رابط بطاقات اللاعبين، حاول مرة ثانية."
                 if self.language == "ar"
-                else "Could not load your profile. Please try again."
+                else "Could not open the player cards link. Please try again."
             )
 
             if interaction.response.is_done():
