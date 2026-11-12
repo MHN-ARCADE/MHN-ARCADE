@@ -45,7 +45,7 @@ from database import (
     save_bot_message,
 )
 from player_profiles_v3 import initialize_player_profiles
-from player_cards_v3 import PlayerCardPanelView as V3PlayerCardPanelView
+from player_progress_panel_v3 import V3PlayerCardPanelView
 from v3_menu import V3MainMenuView, create_main_menu_embed
 
 
@@ -546,8 +546,12 @@ class MHNArcadeBot(commands.Bot):
             )
         )
 
+        # Register the expanded persistent player-card panel.
+        # It needs the V3 runtime for XP and progression access.
         self.add_view(
-            V3PlayerCardPanelView()
+            V3PlayerCardPanelView(
+                runtime=self.v3_runtime,
+            )
         )
 
         synced = await self.tree.sync()
@@ -871,7 +875,9 @@ async def initialize_arcade_systems(
         "player_card_panel",
         PLAYER_CARDS_CHANNEL_ID,
         player_card_panel,
-        view=V3PlayerCardPanelView(),
+        view=V3PlayerCardPanelView(
+            runtime=bot.v3_runtime,
+        ),
     )
 
     # Remove old V2-only public panels.
