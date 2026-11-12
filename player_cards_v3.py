@@ -1,3 +1,4 @@
+
 """MHN ARCADE V3 - bilingual player-card workflow."""
 
 from __future__ import annotations
@@ -31,7 +32,9 @@ PLAYER_CARDS_CHANNEL_ID = 1567719418862112809
 ARABIC_ARCADE_CHANNEL_ID = 1567665645905121330
 ENGLISH_ARCADE_CHANNEL_ID = 1567700330433609910
 PURPLE = 0x7C3AED
-PUBLIC_CARD_SECONDS = 15 * 60
+
+# Public player cards remain visible for 2 minutes and 30 seconds.
+PUBLIC_CARD_SECONDS = 150
 
 
 def rank_for_level(level: int) -> str:
@@ -397,7 +400,7 @@ class ExistingPlayerCardView(discord.ui.View):
         if self.language == "ar":
 
             message = (
-                "💜 تم نشر بطاقة لاعبك للعامة لمدة 15 دقيقة."
+                "💜 تم نشر بطاقة لاعبك للعامة لمدة دقيقتين و30 ثانية."
                 if published
                 else "تعذر نشر البطاقة الآن، حاول مرة ثانية."
             )
@@ -405,7 +408,7 @@ class ExistingPlayerCardView(discord.ui.View):
         else:
 
             message = (
-                "💜 Your player card is now public for 15 minutes."
+                "💜 Your player card is now public for 2 minutes and 30 seconds."
                 if published
                 else "Could not publish your card right now. Please try again."
             )
@@ -899,9 +902,9 @@ class CharacterChoiceSelect(discord.ui.Select):
                 if published:
 
                     result_message = (
-                        "💜 تم تغيير شخصيتك ونشر بطاقة لاعبك للعامة لمدة 15 دقيقة."
+                        "💜 تم تغيير شخصيتك ونشر بطاقة لاعبك للعامة لمدة دقيقتين و30 ثانية."
                         if self.language == "ar"
-                        else "💜 Your character was changed and your player card is public for 15 minutes."
+                        else "💜 Your character was changed and your player card is public for 2 minutes and 30 seconds."
                     )
 
                 else:
