@@ -1,4 +1,3 @@
-
 // ! JSON Lines process interface.
 // ! stdout is reserved for protocol messages.
 // ! Logs are written to stderr.
