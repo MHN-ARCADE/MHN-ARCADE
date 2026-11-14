@@ -1,16 +1,36 @@
-## Hi there 👋
+# MHN ARCADE V4
 
-<!--
-**MHN-ARCADE/MHN-ARCADE** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
+The next-generation MHN ARCADE engine.
 
-Here are some ideas to get you started:
+V4 is developed independently on the MHN-ARCADE-V4 branch.
 
-- 🔭 I’m currently working on ...
-- 🌱 I’m currently learning ...
-- 👯 I’m looking to collaborate on ...
-- 🤔 I’m looking for help with ...
-- 💬 Ask me about ...
-- 📫 How to reach me: ...
-- 😄 Pronouns: ...
-- ⚡ Fun fact: ...
--->
+## Architecture
+
+- Rust: Discord-independent engine.
+- Python: Discord adapter.
+- JSON Lines: local process protocol.
+- Repository abstractions: persistence boundary.
+
+## Important
+
+V4 is under development.
+
+The production Discord bot must remain on v3-engine.
+
+Do not deploy this branch to the production FadeHost app.
+
+No V2/V3 database migration is included in this foundation.
+
+## Initial checks
+
+Rust:
+
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+
+cargo test --manifest-path rust/Cargo.toml --workspace
+
+Python:
+
+python -m compileall -q python main.py
+
+PYTHONPATH=python python -m unittest discover -s python/tests -v
