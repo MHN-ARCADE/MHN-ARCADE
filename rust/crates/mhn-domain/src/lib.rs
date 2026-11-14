@@ -1,4 +1,5 @@
-//! MHN ARCADE V4 domain and protocol contracts.
+
+// ! MHN ARCADE V4 domain and protocol contracts.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -36,10 +37,7 @@ pub struct ProtocolError {
 }
 
 impl Response {
-    pub fn success(
-        request_id: impl Into<String>,
-        payload: Value,
-    ) -> Self {
+    pub fn success(request_id: impl Into<String>, payload: Value) -> Self {
         Self {
             protocol_version: PROTOCOL_VERSION,
             request_id: request_id.into(),
