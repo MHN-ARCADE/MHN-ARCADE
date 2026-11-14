@@ -87,9 +87,6 @@ mod tests {
         let response = Engine.handle(request);
 
         assert!(!response.ok);
-        assert_eq!(
-            response.error.unwrap().code,
-            "unsupported_protocol_version"
-        );
+        assert_eq!(response.error.unwrap().code, "unsupported_protocol_version");
     }
 }
