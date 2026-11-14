@@ -1,4 +1,3 @@
-
 // ! MHN ARCADE V4 domain and protocol contracts.
 
 use serde::{Deserialize, Serialize};
