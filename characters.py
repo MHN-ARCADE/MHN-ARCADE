@@ -1,7 +1,8 @@
+
 """
 ========================================================
-MHN ARCADE V2.0
-Character Collection System 💜
+MHN ARCADE V3
+Character Collection System
 27 Characters - Anime & Netflix
 ========================================================
 """
@@ -38,6 +39,7 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "gojo.JPG",
         "description": "The strongest sorcerer.",
         "description_ar": "أقوى ساحر.",
     },
@@ -50,6 +52,7 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "sukuna.JPG",
         "description": "The King of Curses.",
         "description_ar": "ملك اللعنات.",
     },
@@ -62,6 +65,7 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "levi.JPG",
         "description": "Humanity's strongest soldier.",
         "description_ar": "أقوى جندي للبشرية.",
     },
@@ -74,6 +78,7 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "goku.JPG",
         "description": "The Saiyan warrior.",
         "description_ar": "محارب السايان.",
     },
@@ -86,6 +91,7 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "aizen.PNG",
         "description": "The master manipulator.",
         "description_ar": "العقل المدبر.",
     },
@@ -98,6 +104,7 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "urahara.jpg",
         "description": "The mysterious shopkeeper.",
         "description_ar": "صاحب المتجر الغامض.",
     },
@@ -110,6 +117,7 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "ichigo.PNG",
         "description": "The Substitute Soul Reaper.",
         "description_ar": "الشينيغامي البديل.",
     },
@@ -122,10 +130,10 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "toji.JPG",
         "description": "The Sorcerer Killer.",
         "description_ar": "قاتل السحرة.",
     },
-
 
     # ====================================================
     # ANIME - FEMALE
@@ -139,6 +147,7 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_FEMALE,
         "image_url": None,
+        "image_file": "mikasa.JPG",
         "description": "The elite soldier.",
         "description_ar": "الجندية النخبة.",
     },
@@ -151,6 +160,7 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_FEMALE,
         "image_url": None,
+        "image_file": "nezuko.JPG",
         "description": "The demon girl.",
         "description_ar": "الفتاة الشيطانية.",
     },
@@ -163,6 +173,7 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_FEMALE,
         "image_url": None,
+        "image_file": "makima.JPG",
         "description": "The mysterious Control Devil.",
         "description_ar": "شيطانة السيطرة الغامضة.",
     },
@@ -175,6 +186,7 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_FEMALE,
         "image_url": None,
+        "image_file": "sakura.JPG",
         "description": "The skilled medical ninja.",
         "description_ar": "النينجا الطبية الماهرة.",
     },
@@ -187,6 +199,7 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_FEMALE,
         "image_url": None,
+        "image_file": "nami.JPG",
         "description": "The Straw Hat navigator.",
         "description_ar": "ملاحة طاقم قبعة القش.",
     },
@@ -199,6 +212,7 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_FEMALE,
         "image_url": None,
+        "image_file": "zero_two.JPG",
         "description": "The mysterious pilot.",
         "description_ar": "الطيارة الغامضة.",
     },
@@ -211,10 +225,10 @@ CHARACTERS = {
         "category": CATEGORY_ANIME,
         "gender": GENDER_FEMALE,
         "image_url": None,
+        "image_file": "maki.JPG",
         "description": "The powerful Zenin warrior.",
         "description_ar": "محاربة عائلة زينين.",
     },
-
 
     # ====================================================
     # NETFLIX - MALE
@@ -228,6 +242,7 @@ CHARACTERS = {
         "category": CATEGORY_NETFLIX,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "geralt.JPG",
         "description": "The legendary monster hunter.",
         "description_ar": "صائد الوحوش الأسطوري.",
     },
@@ -240,6 +255,7 @@ CHARACTERS = {
         "category": CATEGORY_NETFLIX,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "berlin.JPG",
         "description": "The elegant strategist.",
         "description_ar": "المخطط الأنيق.",
     },
@@ -252,6 +268,7 @@ CHARACTERS = {
         "category": CATEGORY_NETFLIX,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "professor.JPG",
         "description": "The mastermind behind the plan.",
         "description_ar": "العقل المدبر للخطة.",
     },
@@ -264,6 +281,7 @@ CHARACTERS = {
         "category": CATEGORY_NETFLIX,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "steve.JPG",
         "description": "The brave babysitter.",
         "description_ar": "الحامي الشجاع.",
     },
@@ -276,6 +294,7 @@ CHARACTERS = {
         "category": CATEGORY_NETFLIX,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "eddie.JPG",
         "description": "The metalhead hero.",
         "description_ar": "بطل الميتال.",
     },
@@ -288,10 +307,10 @@ CHARACTERS = {
         "category": CATEGORY_NETFLIX,
         "gender": GENDER_MALE,
         "image_url": None,
+        "image_file": "joe.JPG",
         "description": "The mysterious bookstore manager.",
         "description_ar": "مدير المكتبة الغامض.",
     },
-
 
     # ====================================================
     # NETFLIX - FEMALE
@@ -305,6 +324,7 @@ CHARACTERS = {
         "category": CATEGORY_NETFLIX,
         "gender": GENDER_FEMALE,
         "image_url": None,
+        "image_file": "wednesday.JPG",
         "description": "The dark and clever student.",
         "description_ar": "الطالبة الذكية والغامضة.",
     },
@@ -317,6 +337,7 @@ CHARACTERS = {
         "category": CATEGORY_NETFLIX,
         "gender": GENDER_FEMALE,
         "image_url": None,
+        "image_file": "eleven.JPG",
         "description": "The girl with extraordinary powers.",
         "description_ar": "الفتاة ذات القوى الخارقة.",
     },
@@ -329,6 +350,7 @@ CHARACTERS = {
         "category": CATEGORY_NETFLIX,
         "gender": GENDER_FEMALE,
         "image_url": None,
+        "image_file": "nairobi.JPG",
         "description": "The fearless team leader.",
         "description_ar": "قائدة الفريق الشجاعة.",
     },
@@ -341,6 +363,7 @@ CHARACTERS = {
         "category": CATEGORY_NETFLIX,
         "gender": GENDER_FEMALE,
         "image_url": None,
+        "image_file": "yennefer.JPG",
         "description": "The powerful sorceress.",
         "description_ar": "الساحرة القوية.",
     },
@@ -353,6 +376,7 @@ CHARACTERS = {
         "category": CATEGORY_NETFLIX,
         "gender": GENDER_FEMALE,
         "image_url": None,
+        "image_file": "enola.JPG",
         "description": "The clever young detective.",
         "description_ar": "المحققة الشابة الذكية.",
     },
@@ -365,6 +389,7 @@ CHARACTERS = {
         "category": CATEGORY_NETFLIX,
         "gender": GENDER_FEMALE,
         "image_url": None,
+        "image_file": "beth.JPG",
         "description": "The chess prodigy.",
         "description_ar": "عبقرية الشطرنج.",
     },
@@ -389,7 +414,10 @@ def get_character(character_id):
 def get_all_characters():
     """Return all characters."""
 
-    return [deepcopy(character) for character in CHARACTERS.values()]
+    return [
+        deepcopy(character)
+        for character in CHARACTERS.values()
+    ]
 
 
 def get_characters_by_category(category):
@@ -441,13 +469,10 @@ def get_gender_count(gender):
 
 
 def get_character_statistics():
-
     return {
         "total": len(CHARACTERS),
-
         "anime": get_category_count(CATEGORY_ANIME),
         "netflix": get_category_count(CATEGORY_NETFLIX),
-
         "male": get_gender_count(GENDER_MALE),
         "female": get_gender_count(GENDER_FEMALE),
     }
@@ -458,7 +483,6 @@ def get_character_statistics():
 # ========================================================
 
 def search_characters(query):
-
     query = str(query).strip().lower()
 
     if not query:
@@ -477,7 +501,10 @@ def search_characters(query):
             character["description_ar"],
         )
 
-        if any(query in str(value).lower() for value in searchable):
+        if any(
+            query in str(value).lower()
+            for value in searchable
+        ):
             results.append(deepcopy(character))
 
     return results
@@ -488,6 +515,7 @@ def search_characters(query):
 # ========================================================
 
 def get_character_image(character_id):
+    """Return the external image URL, if one is configured."""
 
     character = get_character(character_id)
 
@@ -497,14 +525,23 @@ def get_character_image(character_id):
     return character.get("image_url")
 
 
-def set_character_image(character_id, image_url):
+def get_character_image_file(character_id):
+    """Return the local image filename for a character."""
 
+    character = get_character(character_id)
+
+    if character is None:
+        return None
+
+    return character.get("image_file")
+
+
+def set_character_image(character_id, image_url):
     """
-    Update the image URL in runtime memory.
+    Update the external image URL in runtime memory.
 
     This does not permanently save image URLs.
-    The final image catalog will be connected
-    to the bot configuration in a later update.
+    Local image filenames remain unchanged.
     """
 
     character_id = str(character_id).lower()
@@ -516,7 +553,9 @@ def set_character_image(character_id, image_url):
         image_url = str(image_url).strip()
 
         if not image_url.startswith(("https://", "http://")):
-            raise ValueError("Image URL must use HTTP or HTTPS.")
+            raise ValueError(
+                "Image URL must use HTTP or HTTPS."
+            )
 
     CHARACTERS[character_id]["image_url"] = image_url
 
@@ -528,7 +567,6 @@ def set_character_image(character_id, image_url):
 # ========================================================
 
 def get_character_select_data(category, language="en"):
-
     """
     Returns character data suitable for Discord select menus.
 
@@ -591,6 +629,19 @@ def validate_character_catalog():
                 f"Character catalog error: {key} "
                 f"expected {expected_value}, got {actual[key]}"
             )
+
+    # Every character must have a local image filename.
+    missing_images = [
+        character_id
+        for character_id, character in CHARACTERS.items()
+        if not character.get("image_file")
+    ]
+
+    if missing_images:
+        raise RuntimeError(
+            "Characters missing image files: "
+            + ", ".join(missing_images)
+        )
 
     return True
 
