@@ -1,4 +1,5 @@
-//! Discord-independent MHN ARCADE V4 engine.
+
+// ! Discord-independent MHN ARCADE V4 engine.
 
 use mhn_domain::{Request, Response, PROTOCOL_VERSION};
 use serde_json::json;
@@ -14,10 +15,7 @@ impl Engine {
             return Response::failure(
                 request.request_id,
                 "unsupported_protocol_version",
-                format!(
-                    "Supported protocol version is {}",
-                    PROTOCOL_VERSION
-                ),
+                format!("Supported protocol version is {}", PROTOCOL_VERSION),
             );
         }
 
@@ -30,25 +28,21 @@ impl Engine {
         }
 
         match request.operation.as_str() {
-            "system.health" => {
-                Response::success(
-                    request.request_id,
-                    json!({
-                        "status": "ok",
-                        "engine": ENGINE_NAME,
-                        "engine_version": env!("CARGO_PKG_VERSION"),
-                        "protocol_version": PROTOCOL_VERSION
-                    }),
-                )
-            }
+            "system.health" => Response::success(
+                request.request_id,
+                json!({
+                    "status": "ok",
+                    "engine": ENGINE_NAME,
+                    "engine_version": env!("CARGO_PKG_VERSION"),
+                    "protocol_version": PROTOCOL_VERSION
+                }),
+            ),
 
-            operation => {
-                Response::failure(
-                    request.request_id,
-                    "unknown_operation",
-                    format!("Unknown operation: {operation}"),
-                )
-            }
+            operation => Response::failure(
+                request.request_id,
+                "unknown_operation",
+                format!("Unknown operation: {operation}"),
+            ),
         }
     }
 }
@@ -70,43 +64,29 @@ mod tests {
 
     #[test]
     fn health_request_succeeds() {
-        let response =
-            Engine.handle(make_request("system.health"));
+        let response = Engine.handle(make_request("system.health"));
 
         assert!(response.ok);
         assert_eq!(response.request_id, "test-1");
-
-        assert_eq!(
-            response.payload.unwrap()["engine"],
-            ENGINE_NAME
-        );
+        assert_eq!(response.payload.unwrap()["engine"], ENGINE_NAME);
     }
 
     #[test]
     fn unknown_operation_returns_error() {
-        let response =
-            Engine.handle(make_request("unknown.operation"));
+        let response = Engine.handle(make_request("unknown.operation"));
 
         assert!(!response.ok);
-
-        assert_eq!(
-            response.error.unwrap().code,
-            "unknown_operation"
-        );
+        assert_eq!(response.error.unwrap().code, "unknown_operation");
     }
 
     #[test]
     fn unsupported_protocol_is_rejected() {
-        let mut request =
-            make_request("system.health");
-
-        request.protocol_version =
-            PROTOCOL_VERSION + 1;
+        let mut request = make_request("system.health");
+        request.protocol_version = PROTOCOL_VERSION + 1;
 
         let response = Engine.handle(request);
 
         assert!(!response.ok);
-
         assert_eq!(
             response.error.unwrap().code,
             "unsupported_protocol_version"
