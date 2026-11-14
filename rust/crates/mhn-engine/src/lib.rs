@@ -1,4 +1,3 @@
-
 // ! Discord-independent MHN ARCADE V4 engine.
 
 use mhn_domain::{Request, Response, PROTOCOL_VERSION};
