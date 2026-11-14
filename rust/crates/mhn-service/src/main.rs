@@ -37,11 +37,7 @@ fn main() {
             Err(error) => {
                 eprintln!("Invalid request JSON: {error}");
 
-                Response::failure(
-                    "",
-                    "invalid_json",
-                    "Request must be valid JSON",
-                )
+                Response::failure("", "invalid_json", "Request must be valid JSON")
             }
         };
 
