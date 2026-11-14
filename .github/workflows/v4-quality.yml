@@ -39,6 +39,9 @@ jobs:
     name: Python Quality Checks
     runs-on: ubuntu-latest
 
+    env:
+      PYTHONPATH: python
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
