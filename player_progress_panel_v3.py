@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-
+from pathlib import Path
 import aiohttp
 import discord
 
@@ -28,50 +28,44 @@ CARD_DURATION = 150
 ARABIC_ARCADE_CHANNEL_ID = 1567665645905121330
 ENGLISH_ARCADE_CHANNEL_ID = 1567700330433609910
 
-
 async def _read_character_image(character) -> bytes | None:
-    """Download the selected character artwork without modifying it."""
+    """Read the selected character artwork from the local repository."""
 
     if not character:
         return None
 
-    image_url = character.get("image_url")
+    image_file = character.get("image_file")
 
-    if not image_url:
+    if not image_file:
+        logger.warning("Character has no local image filename.")
         return None
 
-    timeout = aiohttp.ClientTimeout(total=12)
+    image_path = Path(__file__).resolve().parent / image_file
 
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(image_url) as response:
-                if response.status != 200:
-                    return None
+        if not image_path.is_file():
+            logger.warning(
+                "Character image file was not found: %s",
+                image_path.name,
+            )
+            return None
 
-                content_type = response.headers.get("Content-Type", "")
+        if image_path.stat().st_size > 8 * 1024 * 1024:
+            logger.warning(
+                "Character image exceeds the 8 MB limit: %s",
+                image_path.name,
+            )
+            return None
 
-                if not content_type.startswith("image/"):
-                    return None
+        return image_path.read_bytes()
 
-                image_bytes = await response.read()
-
-                # Avoid unexpectedly large remote image downloads.
-                if len(image_bytes) > 8 * 1024 * 1024:
-                    logger.warning(
-                        "Character image is too large: %s bytes",
-                        len(image_bytes),
-                    )
-                    return None
-
-                return image_bytes
-
-    except (aiohttp.ClientError, asyncio.TimeoutError):
+    except OSError:
         logger.warning(
-            "Could not download selected character artwork.",
+            "Could not read local character artwork: %s",
+            image_file,
             exc_info=True,
         )
         return None
-
 
 async def _read_avatar(member: discord.abc.User) -> bytes | None:
     """Read the member avatar for the PNG card."""
